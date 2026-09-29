@@ -447,6 +447,47 @@ func (d *DB) ListComponents(ctx context.Context, productName, releaseVersion str
 	return components, nil
 }
 
+// ListAllComponents returns every recorded package together with its owning
+// product release. It is intended for inventory-wide views such as the local
+// dashboard.
+func (d *DB) ListAllComponents(ctx context.Context) ([]Component, error) {
+	rows, err := d.db.QueryContext(ctx, `SELECT
+		p.name, r.version, c.ecosystem, c.name, c.version, c.created_at
+		FROM components c
+		JOIN releases r ON r.id = c.release_id
+		JOIN products p ON p.id = r.product_id
+		ORDER BY p.name COLLATE NOCASE, r.version, c.ecosystem, c.name, c.version`)
+	if err != nil {
+		return nil, fmt.Errorf("list all components: %w", err)
+	}
+	defer rows.Close()
+
+	components := make([]Component, 0)
+	for rows.Next() {
+		var component Component
+		var createdAt string
+		if err := rows.Scan(
+			&component.Product,
+			&component.ReleaseVersion,
+			&component.Ecosystem,
+			&component.Name,
+			&component.Version,
+			&createdAt,
+		); err != nil {
+			return nil, fmt.Errorf("read component: %w", err)
+		}
+		component.CreatedAt, err = parseTime(createdAt)
+		if err != nil {
+			return nil, err
+		}
+		components = append(components, component)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list all components: %w", err)
+	}
+	return components, nil
+}
+
 func (d *DB) productID(ctx context.Context, name string) (int64, string, error) {
 	var id int64
 	var canonicalName string

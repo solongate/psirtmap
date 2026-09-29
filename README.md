@@ -8,12 +8,53 @@ vulnerabilities to the versions of products you have actually shipped.
 Built for device, firmware, and embedded-software manufacturers. Local-first,
 CLI-first, and written in Go. Offline feed support is planned.
 
-## Current milestone: v0.0.2
+## Current milestone: v0.0.3
 
-PSIRTMap can now keep a local inventory of products, releases, and components,
-then match every component in a shipped release against OSV.
+PSIRTMap now includes a full-screen terminal dashboard for managing the local
+inventory and scanning shipped releases without memorizing commands. The
+scriptable commands remain available for automation.
 
-## Quick start
+## Interactive dashboard
+
+Run PSIRTMap in an interactive terminal:
+
+```console
+$ psirtmap
+```
+
+You can also launch the dashboard explicitly, including with a separate test
+database:
+
+```console
+$ psirtmap dashboard
+$ psirtmap --database ./demo.db dashboard
+```
+
+The dashboard provides:
+
+- A live overview of products, releases, and components in local SQLite.
+- Browsable product, release, and component inventories.
+- Guided forms for creating products, releases, and components.
+- Release selection and live OSV scanning with review-safe wording.
+- Responsive wide and compact terminal layouts.
+
+Main keys:
+
+```text
+↑/↓ or j/k   move through sections or rows
+←/→ or h/l   focus navigation or content
+1–5            open a section directly
+n              create an item in the current section
+s or Enter     scan the selected release
+r              refresh the local inventory
+?              show keyboard help
+q              quit
+```
+
+The dashboard and regular commands use the same database. Nothing is uploaded
+to a PSIRTMap cloud service.
+
+## Scriptable CLI quick start
 
 Initialize the local SQLite database:
 
@@ -155,7 +196,8 @@ review determines whether the shipped product is actually affected.
 
 Today, `scan` queries OSV live. Persisted vulnerability feeds, CISA KEV
 enrichment, CycloneDX import, findings history, and human assessments are the
-next milestones; the CLI does not pretend those features exist yet.
+next milestones; the CLI does not pretend those features exist yet. See
+[ROADMAP.md](ROADMAP.md) for the ordered delivery plan and explicit non-goals.
 
 ## License
 

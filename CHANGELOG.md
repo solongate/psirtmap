@@ -6,6 +6,26 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-09-29
+
+### Added
+
+- Full-screen, keyboard-driven terminal dashboard.
+- Responsive wide and compact terminal layouts.
+- Dashboard views for inventory overview, products, releases, components, and
+  live release scanning.
+- Guided dashboard forms for creating products, releases, and components.
+- Interactive help, status feedback, loading indicators, and safe quit/cancel
+  behavior.
+- Inventory-wide component listing for local dashboard views.
+- A prioritized product roadmap with explicit near-term scope and non-goals.
+
+### Changed
+
+- Running `psirtmap` without arguments in an interactive terminal now opens
+  the dashboard; non-interactive use still prints normal command help.
+- Version advanced to `0.0.3`.
+
 ## [0.0.2] - 2026-09-29
 
 ### Added
@@ -35,6 +55,7 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Human-readable and JSON output.
 - Automated tests, cross-platform release builds, and Apache-2.0 licensing.
 
-[Unreleased]: https://github.com/solongate/psirtmap/compare/v0.0.2...HEAD
+[Unreleased]: https://github.com/solongate/psirtmap/compare/v0.0.3...HEAD
+[0.0.3]: https://github.com/solongate/psirtmap/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/solongate/psirtmap/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/solongate/psirtmap/releases/tag/v0.0.1
