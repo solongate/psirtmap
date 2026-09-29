@@ -37,6 +37,8 @@ jobs:
 
       - name: Verify source
         run: |
+          go mod download
+          go mod verify
           go vet ./...
           go test -race -count=1 ./...
 
@@ -45,6 +47,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
+          sqlite_dir="$(go list -m -f '{{.Dir}}' modernc.org/sqlite)"
           mkdir -p build dist
 
           build_archive() {
@@ -61,7 +64,11 @@ jobs:
             CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
               go build -trimpath -ldflags="-s -w" \
               -o "build/$package/$binary" .
-            cp LICENSE NOTICE README.md "build/$package/"
+            cp LICENSE NOTICE README.md CHANGELOG.md SECURITY.md "build/$package/"
+            cp THIRD_PARTY_NOTICES.md "build/$package/"
+            cp "$sqlite_dir/LICENSE" "build/$package/THIRD_PARTY-modernc-sqlite-LICENSE"
+            cp "$sqlite_dir/LICENSE-SQLITE" "build/$package/THIRD_PARTY-SQLITE-LICENSE"
+            cp "$sqlite_dir/LICENSE-3RD-PARTY.md" "build/$package/THIRD_PARTY-LICENSES.md"
 
             if [[ "$os" == "windows" ]]; then
               (cd build && zip -qr "../dist/$package.zip" "$package")

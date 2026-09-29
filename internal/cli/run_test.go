@@ -121,3 +121,114 @@ func TestRunCheckJSONUsesEmptyArrayForNoMatches(t *testing.T) {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 }
+
+func TestRunCheckSanitizesUntrustedTerminalText(t *testing.T) {
+	t.Parallel()
+
+	querier := &fakeQuerier{result: []osv.Vulnerability{{
+		ID:      "OSV-1\x1b[31m/path",
+		Summary: "first\nsecond\x1b[0m",
+		Aliases: []string{"CVE-1\tALIAS"},
+	}}}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := cli.Run(
+		context.Background(),
+		[]string{"check", "pkg", "1.0", "-e", "npm"},
+		&stdout,
+		&stderr,
+		querier,
+	)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d; stderr = %q", exitCode, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "\x1b") || strings.Contains(stdout.String(), "first\nsecond") {
+		t.Fatalf("stdout contains unsafe control characters: %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "OSV-1%1B%5B31m%2Fpath") {
+		t.Fatalf("URL path was not escaped: %q", stdout.String())
+	}
+}
+
+func TestRunCheckRejectsControlCharacters(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := cli.Run(
+		context.Background(),
+		[]string{"check", "bad\x1bname", "1.0", "-e", "npm"},
+		&stdout,
+		&stderr,
+		&fakeQuerier{},
+	)
+	if exitCode != 2 || !strings.Contains(stderr.String(), "control characters") {
+		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+}
+
+func TestRunCheckHelpAndNoMatches(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name       string
+		args       []string
+		wantOutput string
+	}{
+		{name: "help", args: []string{"check", "--help"}, wantOutput: "Query OSV"},
+		{name: "no matches", args: []string{"check", "pkg", "1.0", "-e", "npm"}, wantOutput: "No known vulnerabilities"},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			exitCode := cli.Run(context.Background(), test.args, &stdout, &stderr, &fakeQuerier{})
+			if exitCode != 0 || !strings.Contains(stdout.String(), test.wantOutput) {
+				t.Fatalf("exit code = %d, stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+func TestRunCheckUsageErrors(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "unknown option", args: []string{"check", "pkg", "1", "-e", "npm", "--wat"}, want: "unknown option"},
+		{name: "missing ecosystem value", args: []string{"check", "pkg", "1", "--ecosystem"}, want: "requires a value"},
+		{name: "too many arguments", args: []string{"check", "pkg", "1", "extra", "-e", "npm"}, want: "requires a package and version"},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			exitCode := cli.Run(context.Background(), test.args, &stdout, &stderr, &fakeQuerier{})
+			if exitCode != 2 || !strings.Contains(stderr.String(), test.want) {
+				t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr.String())
+			}
+		})
+	}
+}
+
+func TestRunCheckReportsCancellation(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := cli.Run(
+		context.Background(),
+		[]string{"check", "pkg", "1", "-e", "npm"},
+		&stdout,
+		&stderr,
+		&fakeQuerier{err: context.Canceled},
+	)
+	if exitCode != 1 || !strings.Contains(stderr.String(), "operation canceled") {
+		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+}
