@@ -14,7 +14,7 @@ import (
 	"github.com/solongate/psirtmap/internal/store"
 )
 
-const version = "0.0.2"
+const version = "0.0.3"
 
 // VulnerabilityQuerier is implemented by the OSV client.
 type VulnerabilityQuerier interface {
@@ -45,7 +45,7 @@ func Run(
 	switch remaining[0] {
 	case "check":
 		return runCheck(ctx, remaining[1:], stdout, stderr, querier)
-	case "init", "product", "release", "component", "scan":
+	case "init", "product", "release", "component", "scan", "dashboard", "ui":
 		if printRequestedInventoryHelp(remaining, stdout) {
 			return 0
 		}
@@ -74,7 +74,7 @@ func printRequestedInventoryHelp(args []string, stdout io.Writer) bool {
 	if len(commandArgs) == 1 && commandArgs[0] == "help" {
 		helpRequested = true
 	}
-	if len(commandArgs) == 0 && command != "init" {
+	if len(commandArgs) == 0 && command != "init" && command != "dashboard" && command != "ui" {
 		helpRequested = true
 	}
 	if !helpRequested {
@@ -92,6 +92,8 @@ func printRequestedInventoryHelp(args []string, stdout io.Writer) bool {
 		printComponentUsage(stdout)
 	case "scan":
 		printScanUsage(stdout)
+	case "dashboard", "ui":
+		printDashboardUsage(stdout)
 	}
 	return true
 }
@@ -165,6 +167,8 @@ func runInventoryCommand(
 		return runComponent(ctx, args[1:], stdout, stderr, database)
 	case "scan":
 		return runScan(ctx, args[1:], stdout, stderr, database, querier)
+	case "dashboard", "ui":
+		return runDashboard(ctx, args[1:], stdout, stderr, database, querier)
 	default:
 		panic("unreachable inventory command")
 	}

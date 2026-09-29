@@ -11,6 +11,9 @@ func printUsage(writer io.Writer) {
 Usage:
   psirtmap [--database <path>] <command>
 
+Interactive:
+  dashboard   Open the full-screen local dashboard (alias: ui)
+
 Inventory commands:
   init        Initialize the local database
   product     Add and list products
@@ -88,4 +91,15 @@ Usage:
   psirtmap scan <product>@<release> [--json]
 
 A match means potentially affected and requires human review.`)
+}
+
+func printDashboardUsage(writer io.Writer) {
+	fmt.Fprintln(writer, `Open PSIRTMap's interactive terminal dashboard.
+
+Usage:
+  psirtmap [--database <path>] dashboard
+
+The dashboard reads and updates the same local SQLite inventory as the regular
+commands. On an interactive terminal, running "psirtmap" without a command
+opens the dashboard automatically.`)
 }

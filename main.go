@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 
+	"github.com/mattn/go-isatty"
 	"github.com/solongate/psirtmap/internal/cli"
 	"github.com/solongate/psirtmap/internal/osv"
 )
@@ -14,5 +15,17 @@ func main() {
 	defer stop()
 
 	client := osv.NewClient(nil)
-	os.Exit(cli.Run(ctx, os.Args[1:], os.Stdout, os.Stderr, client))
+	args := os.Args[1:]
+	if len(args) == 0 && isInteractiveTerminal() {
+		args = []string{"dashboard"}
+	}
+	os.Exit(cli.Run(ctx, args, os.Stdout, os.Stderr, client))
+}
+
+func isInteractiveTerminal() bool {
+	stdin := os.Stdin.Fd()
+	stdout := os.Stdout.Fd()
+	stdinInteractive := isatty.IsTerminal(stdin) || isatty.IsCygwinTerminal(stdin)
+	stdoutInteractive := isatty.IsTerminal(stdout) || isatty.IsCygwinTerminal(stdout)
+	return stdinInteractive && stdoutInteractive
 }

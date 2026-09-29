@@ -95,6 +95,10 @@ func TestInventoryLifecyclePersists(t *testing.T) {
 	if err != nil || len(components) != 1 || components[0].Name != "@scope/pkg" {
 		t.Fatalf("ListComponents() = %+v, %v", components, err)
 	}
+	allComponents, err := database.ListAllComponents(ctx)
+	if err != nil || len(allComponents) != 1 || allComponents[0].Product != "AG-200" {
+		t.Fatalf("ListAllComponents() = %+v, %v", allComponents, err)
+	}
 }
 
 func TestListsAreSortedAndEmptyListsAreNonNil(t *testing.T) {
@@ -110,6 +114,10 @@ func TestListsAreSortedAndEmptyListsAreNonNil(t *testing.T) {
 	products, err := database.ListProducts(ctx)
 	if err != nil || products == nil || len(products) != 0 {
 		t.Fatalf("empty ListProducts() = %#v, %v", products, err)
+	}
+	components, err := database.ListAllComponents(ctx)
+	if err != nil || components == nil || len(components) != 0 {
+		t.Fatalf("empty ListAllComponents() = %#v, %v", components, err)
 	}
 	for _, name := range []string{"Zulu", "alpha", "Bravo"} {
 		if _, err := database.CreateProduct(ctx, name, ""); err != nil {

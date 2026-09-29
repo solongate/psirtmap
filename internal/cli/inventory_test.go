@@ -236,7 +236,7 @@ func TestGlobalDatabaseOptionValidation(t *testing.T) {
 func TestInventoryHelpDoesNotCreateDatabase(t *testing.T) {
 	t.Parallel()
 
-	for _, command := range []string{"init", "product", "release", "component", "scan"} {
+	for _, command := range []string{"init", "product", "release", "component", "scan", "dashboard", "ui"} {
 		command := command
 		t.Run(command, func(t *testing.T) {
 			t.Parallel()
@@ -264,7 +264,7 @@ func TestRootCommandsAndUsageErrors(t *testing.T) {
 		useStderr  bool
 	}{
 		{name: "root help", args: []string{"--help"}, wantCode: 0, wantOutput: "Inventory commands:"},
-		{name: "version", args: []string{"version"}, wantCode: 0, wantOutput: "0.0.2"},
+		{name: "version", args: []string{"version"}, wantCode: 0, wantOutput: "0.0.3"},
 		{name: "unknown", args: []string{"wat"}, wantCode: 2, wantOutput: "unknown command", useStderr: true},
 		{name: "missing database value", args: []string{"--database"}, wantCode: 2, wantOutput: "requires a value", useStderr: true},
 	}
