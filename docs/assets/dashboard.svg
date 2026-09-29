@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title description">
+  <title id="title">PSIRTMap terminal dashboard</title>
+  <desc id="description">A dark terminal interface showing a product-security inventory overview with products, releases, components, and data-source status.</desc>
+  <defs>
+    <linearGradient id="shell" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#161b22"/>
+      <stop offset="1" stop-color="#11151c"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#000" flood-opacity=".34"/>
+    </filter>
+    <style>
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+      .label { fill: #8b949e; font-size: 17px; letter-spacing: .04em; }
+      .body { fill: #c9d1d9; font-size: 18px; }
+      .strong { fill: #f0f6fc; font-size: 18px; font-weight: 700; }
+      .accent { fill: #a89cff; }
+      .mint { fill: #5eead4; }
+      .amber { fill: #f7b955; }
+    </style>
+  </defs>
+
+  <rect width="1280" height="720" rx="34" fill="#0d1117"/>
+  <g filter="url(#shadow)">
+    <rect x="42" y="38" width="1196" height="638" rx="20" fill="url(#shell)" stroke="#30363d" stroke-width="2"/>
+    <path d="M42 96h1196" stroke="#30363d" stroke-width="2"/>
+  </g>
+
+  <circle cx="76" cy="67" r="9" fill="#ff6b6b"/>
+  <circle cx="106" cy="67" r="9" fill="#f7b955"/>
+  <circle cx="136" cy="67" r="9" fill="#46d369"/>
+  <text x="166" y="73" class="mono label">psirtmap — local inventory</text>
+
+  <text x="76" y="151" class="mono accent" font-size="50" font-weight="800" letter-spacing="3">PSIRTMAP</text>
+  <text x="78" y="181" class="mono label">shipped-product vulnerability impact • local-first • human-reviewed</text>
+
+  <rect x="76" y="216" width="256" height="358" rx="12" fill="#0d1117" stroke="#3c4450" stroke-width="2"/>
+  <text x="100" y="252" class="mono strong">Workspace</text>
+  <rect x="92" y="272" width="224" height="42" rx="8" fill="#242139"/>
+  <rect x="92" y="272" width="4" height="42" rx="2" fill="#8b7cf6"/>
+  <text x="112" y="299" class="mono strong accent">Overview</text>
+  <text x="112" y="346" class="mono body">Products</text>
+  <text x="112" y="390" class="mono body">Releases</text>
+  <text x="112" y="434" class="mono body">Components</text>
+  <text x="112" y="478" class="mono body">Scanner</text>
+  <text x="100" y="530" class="mono label">DATABASE</text>
+  <text x="100" y="555" class="mono body">~/.psirtmap/</text>
+
+  <rect x="354" y="216" width="850" height="358" rx="12" fill="#0d1117" stroke="#51479a" stroke-width="2"/>
+  <text x="382" y="254" class="mono strong">Overview</text>
+  <text x="482" y="254" class="mono label">inventory health and next actions</text>
+
+  <rect x="382" y="278" width="242" height="80" rx="10" fill="#151a22" stroke="#30363d"/>
+  <text x="404" y="313" class="mono accent" font-size="27" font-weight="800">2</text>
+  <text x="404" y="339" class="mono label">PRODUCTS</text>
+  <rect x="646" y="278" width="242" height="80" rx="10" fill="#151a22" stroke="#30363d"/>
+  <text x="668" y="313" class="mono accent" font-size="27" font-weight="800">2</text>
+  <text x="668" y="339" class="mono label">RELEASES</text>
+  <rect x="910" y="278" width="266" height="80" rx="10" fill="#151a22" stroke="#30363d"/>
+  <text x="932" y="313" class="mono accent" font-size="27" font-weight="800">3</text>
+  <text x="932" y="339" class="mono label">COMPONENTS</text>
+
+  <text x="382" y="403" class="mono strong">Data sources</text>
+  <circle cx="392" cy="440" r="6" fill="#5eead4"/>
+  <text x="410" y="446" class="mono body">Local inventory</text>
+  <text x="688" y="446" class="mono mint" font-size="16" font-weight="700">READY</text>
+  <circle cx="392" cy="480" r="6" fill="#5eead4"/>
+  <text x="410" y="486" class="mono body">OSV live queries</text>
+  <text x="688" y="486" class="mono mint" font-size="16" font-weight="700">READY</text>
+  <circle cx="850" cy="440" r="6" fill="none" stroke="#f7b955" stroke-width="2"/>
+  <text x="868" y="446" class="mono body">CISA KEV</text>
+  <text x="1068" y="446" class="mono amber" font-size="16" font-weight="700">PLANNED</text>
+  <circle cx="850" cy="480" r="6" fill="none" stroke="#f7b955" stroke-width="2"/>
+  <text x="868" y="486" class="mono body">Offline feed</text>
+  <text x="1068" y="486" class="mono amber" font-size="16" font-weight="700">PLANNED</text>
+
+  <text x="382" y="538" class="mono label">SELECT A RELEASE, THEN PRESS S TO SCAN</text>
+
+  <path d="M76 610h1128" stroke="#30363d"/>
+  <text x="78" y="642" class="mono body"><tspan class="mint" font-weight="700">↑↓</tspan> move</text>
+  <text x="214" y="642" class="mono body"><tspan class="mint" font-weight="700">→/enter</tspan> open</text>
+  <text x="410" y="642" class="mono body"><tspan class="mint" font-weight="700">n</tspan> new</text>
+  <text x="520" y="642" class="mono body"><tspan class="mint" font-weight="700">s</tspan> scan</text>
+  <text x="636" y="642" class="mono body"><tspan class="mint" font-weight="700">?</tspan> help</text>
+  <text x="756" y="642" class="mono body"><tspan class="mint" font-weight="700">q</tspan> quit</text>
+</svg>

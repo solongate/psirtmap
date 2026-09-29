@@ -1,0 +1,76 @@
+name: Bug report
+description: Report reproducible behavior in the latest PSIRTMap release.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve PSIRTMap. For a suspected security vulnerability, stop here and use the private security reporting link instead.
+
+  - type: input
+    id: version
+    attributes:
+      label: PSIRTMap version
+      description: Run `psirtmap version` and paste the result.
+      placeholder: 0.0.3
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Include operating system, architecture, and installation method.
+      placeholder: macOS 15, arm64, release archive
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Affected interface
+      options:
+        - Terminal dashboard
+        - Scriptable CLI
+        - Installation or release archive
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest sequence that reliably triggers the problem.
+      placeholder: |
+        1. Run ...
+        2. Select ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include sanitized output or logs when useful.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Data safety
+      options:
+        - label: I removed credentials, customer data, proprietary SBOM content, and unrelated secrets.
+          required: true
+        - label: This report does not describe a security vulnerability in PSIRTMap.
+          required: true
