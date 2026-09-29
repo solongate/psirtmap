@@ -1,0 +1,91 @@
+package cli
+
+import (
+	"fmt"
+	"io"
+)
+
+func printUsage(writer io.Writer) {
+	fmt.Fprintln(writer, `PSIRTMap maps vulnerabilities to software you ship.
+
+Usage:
+  psirtmap [--database <path>] <command>
+
+Inventory commands:
+  init        Initialize the local database
+  product     Add and list products
+  release     Add and list product releases
+  component   Add and list release components
+  scan        Match a release's components against OSV
+
+Other commands:
+  check       Query OSV for one package version
+  version     Print the PSIRTMap version
+  help        Show this help
+
+Global options:
+  -d, --database <path>  SQLite database path (default: ~/.psirtmap/psirtmap.db)
+
+Run "psirtmap <command> --help" for command details.`)
+}
+
+func printCheckUsage(writer io.Writer) {
+	fmt.Fprintln(writer, `Query OSV for known vulnerabilities affecting a package version.
+
+Usage:
+  psirtmap check <package> <version> --ecosystem <ecosystem> [--json]
+
+Examples:
+  psirtmap check jinja2 2.4.1 --ecosystem PyPI
+  psirtmap check lodash 4.17.20 --ecosystem npm --json
+
+OSV ecosystem names are case-sensitive.`)
+}
+
+func printInitUsage(writer io.Writer) {
+	fmt.Fprintln(writer, `Initialize PSIRTMap's local SQLite database.
+
+Usage:
+  psirtmap [--database <path>] init`)
+}
+
+func printProductUsage(writer io.Writer) {
+	fmt.Fprintln(writer, `Manage products.
+
+Usage:
+  psirtmap product add <name> [--description <text>] [--json]
+  psirtmap product list [--json]
+
+"create" is accepted as an alias for "add".`)
+}
+
+func printReleaseUsage(writer io.Writer) {
+	fmt.Fprintln(writer, `Manage product releases.
+
+Usage:
+  psirtmap release add <product> <version> [--json]
+  psirtmap release list [product] [--json]
+
+"create" is accepted as an alias for "add".`)
+}
+
+func printComponentUsage(writer io.Writer) {
+	fmt.Fprintln(writer, `Manage the components in a product release.
+
+Usage:
+  psirtmap component add <product>@<release> <package>@<version> --ecosystem <ecosystem> [--json]
+  psirtmap component list <product>@<release> [--json]
+
+Examples:
+  psirtmap component add AG-200@2.2 openssl@3.0.8 --ecosystem Alpine
+  psirtmap component add web@1.0 @scope/pkg@2.1.0 --ecosystem npm`)
+}
+
+func printScanUsage(writer io.Writer) {
+	fmt.Fprintln(writer, `Match every component in a product release against OSV.
+
+Usage:
+  psirtmap scan <product>@<release> [--json]
+
+A match means potentially affected and requires human review.`)
+}

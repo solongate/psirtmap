@@ -146,11 +146,145 @@ func (c *Client) Query(ctx context.Context, pkg Package, version string) ([]Vuln
 		pageToken = response.NextPageToken
 	}
 
+	vulnerabilities = canonicalizeVulnerabilities(vulnerabilities)
 	sort.Slice(vulnerabilities, func(i, j int) bool {
 		return vulnerabilities[i].ID < vulnerabilities[j].ID
 	})
 
 	return vulnerabilities, nil
+}
+
+func canonicalizeVulnerabilities(records []Vulnerability) []Vulnerability {
+	if len(records) < 2 {
+		return records
+	}
+
+	parents := make([]int, len(records))
+	for index := range parents {
+		parents[index] = index
+	}
+	var find func(int) int
+	find = func(index int) int {
+		if parents[index] != index {
+			parents[index] = find(parents[index])
+		}
+		return parents[index]
+	}
+	union := func(left, right int) {
+		leftRoot := find(left)
+		rightRoot := find(right)
+		if leftRoot != rightRoot {
+			parents[rightRoot] = leftRoot
+		}
+	}
+
+	identifierOwner := make(map[string]int)
+	for index, record := range records {
+		identifiers := append([]string{record.ID}, record.Aliases...)
+		for _, identifier := range identifiers {
+			identifier = strings.TrimSpace(identifier)
+			if identifier == "" {
+				continue
+			}
+			if owner, exists := identifierOwner[identifier]; exists {
+				union(index, owner)
+			} else {
+				identifierOwner[identifier] = index
+			}
+		}
+	}
+
+	groups := make(map[int][]Vulnerability)
+	for index, record := range records {
+		root := find(index)
+		groups[root] = append(groups[root], record)
+	}
+
+	merged := make([]Vulnerability, 0, len(groups))
+	for _, group := range groups {
+		merged = append(merged, mergeVulnerabilityGroup(group))
+	}
+	return merged
+}
+
+func mergeVulnerabilityGroup(records []Vulnerability) Vulnerability {
+	identifiers := make(map[string]struct{})
+	severitySet := make(map[Severity]struct{})
+	var merged Vulnerability
+	for _, record := range records {
+		if record.ID != "" {
+			identifiers[record.ID] = struct{}{}
+		}
+		for _, alias := range record.Aliases {
+			if alias != "" {
+				identifiers[alias] = struct{}{}
+			}
+		}
+		merged.Summary = preferredText(merged.Summary, record.Summary)
+		merged.Details = preferredText(merged.Details, record.Details)
+		if merged.Published == "" || (record.Published != "" && record.Published < merged.Published) {
+			merged.Published = record.Published
+		}
+		if record.Modified > merged.Modified {
+			merged.Modified = record.Modified
+		}
+		for _, severity := range record.Severity {
+			severitySet[severity] = struct{}{}
+		}
+	}
+
+	allIdentifiers := make([]string, 0, len(identifiers))
+	for identifier := range identifiers {
+		allIdentifiers = append(allIdentifiers, identifier)
+	}
+	sort.Slice(allIdentifiers, func(i, j int) bool {
+		leftRank := identifierRank(allIdentifiers[i])
+		rightRank := identifierRank(allIdentifiers[j])
+		if leftRank != rightRank {
+			return leftRank < rightRank
+		}
+		return allIdentifiers[i] < allIdentifiers[j]
+	})
+	if len(allIdentifiers) > 0 {
+		merged.ID = allIdentifiers[0]
+		merged.Aliases = append([]string(nil), allIdentifiers[1:]...)
+		sort.Strings(merged.Aliases)
+	}
+
+	merged.Severity = make([]Severity, 0, len(severitySet))
+	for severity := range severitySet {
+		merged.Severity = append(merged.Severity, severity)
+	}
+	sort.Slice(merged.Severity, func(i, j int) bool {
+		if merged.Severity[i].Type != merged.Severity[j].Type {
+			return merged.Severity[i].Type < merged.Severity[j].Type
+		}
+		return merged.Severity[i].Score < merged.Severity[j].Score
+	})
+	if len(merged.Severity) == 0 {
+		merged.Severity = nil
+	}
+	return merged
+}
+
+func identifierRank(identifier string) int {
+	switch {
+	case strings.HasPrefix(identifier, "CVE-"):
+		return 0
+	case strings.HasPrefix(identifier, "GHSA-"):
+		return 1
+	case strings.HasPrefix(identifier, "OSV-"):
+		return 2
+	default:
+		return 3
+	}
+}
+
+func preferredText(current, candidate string) string {
+	if len(candidate) > len(current) || (len(candidate) == len(current) && candidate < current) {
+		return candidate
+	}
+	return current
 }
 
 func (c *Client) queryPage(ctx context.Context, query queryRequest) (queryResponse, error) {
