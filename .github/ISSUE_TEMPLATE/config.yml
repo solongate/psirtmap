@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/solongate/psirtmap/security/advisories/new
+    about: Report suspected security vulnerabilities privately. Do not open a public issue.
+  - name: Usage and project documentation
+    url: https://github.com/solongate/psirtmap#readme
+    about: Review setup, current capabilities, limitations, and command examples.

@@ -1,104 +1,123 @@
-# PSIRTMap roadmap
+# Roadmap
 
-PSIRTMap maps newly disclosed vulnerabilities to product versions that have
-actually shipped. This roadmap keeps that product-security goal narrow and
-orders work by the value it unlocks.
+PSIRTMap is being built around one product-security workflow:
 
-## Shipped
+```text
+shipped product release -> component inventory -> vulnerability match -> human decision
+```
 
-### v0.0.1 — One-package OSV check
+This roadmap is directional, not a delivery promise. Work is intentionally
+ordered so every release remains small, testable, and useful on its own.
 
-- Query one ecosystem, package, and version through OSV.
-- Human-readable and JSON output.
+## At a glance
 
-### v0.0.2 — Local shipped-product inventory
+| Stage | Outcome | Status |
+|---|---|---|
+| Package check | Query one package version through OSV | Shipped in `v0.0.1` |
+| Product inventory | Store products, releases, and components locally | Shipped in `v0.0.2` |
+| Terminal dashboard | Manage inventory and scan releases interactively | Shipped in `v0.0.3` |
+| SBOM import | Build release inventory from CycloneDX JSON | Next |
+| Finding lifecycle | Persist matches and track what changed | Planned |
+| Human assessment | Record impact decisions and evidence | Planned |
+| KEV enrichment | Prioritize known exploitation | Planned |
+| Offline feeds | Scan from validated, transferable feed bundles | Planned |
+| VEX | Export human assessments in a machine-readable format | Later |
 
-- Store products, releases, and components in local SQLite.
-- Scan every component in a selected release through OSV.
-- Report matches as `needs-review`, never as automatic proof of exploitability.
+## Next: CycloneDX import
 
-### v0.0.3 — Interactive terminal dashboard
+The next release will replace most manual component entry with a single,
+transactional import:
 
-- Full-screen, keyboard-driven local dashboard.
-- Browse the complete product inventory.
-- Create products, releases, and components through guided forms.
-- Select and scan shipped releases without memorizing commands.
-- Preserve regular CLI commands for scripts and automation.
+```sh
+psirtmap release import AG-200@2.2 ./firmware-2.2.cdx.json
+```
 
-## Next: complete the first useful PSIRT workflow
+Planned acceptance criteria:
 
-These are ordered. Each item should remain independently testable and
-releasable.
-
-### 1. CycloneDX JSON import
-
-- `psirtmap release import <product>@<release> <bom.cdx.json>`.
-- Validate the document before changing the database.
-- Import package URL (purl), ecosystem, name, and version where available.
-- Deduplicate components and print an import summary.
+- Support CycloneDX JSON first.
+- Validate the complete document before changing the database.
+- Import package URL (purl), ecosystem, name, and version when available.
+- Deduplicate components deterministically.
+- Report imported, skipped, and invalid records clearly.
 - Keep manual component entry for demos and corrections.
 
-### 2. Persistent vulnerability and finding history
+## First complete PSIRT workflow
 
-- Store normalized vulnerability records locally.
-- Store scan runs and product-release findings.
+After SBOM import, development proceeds in this order.
+
+### 1. Persistent findings
+
+- Normalize and store vulnerability records locally.
+- Record scan runs against specific product releases.
 - Distinguish new, unchanged, and no-longer-matched findings.
-- Add `findings` filters and deterministic JSON export.
-- Preserve the source record and matching evidence for auditability.
+- Preserve source records and matching evidence for auditability.
+- Add filtering and deterministic JSON export.
 
-### 3. Human impact assessment
+### 2. Human assessment
 
-- Assessment states: `investigating`, `affected`, `not-affected`, and `fixed`.
+- Support `investigating`, `affected`, `not-affected`, and `fixed` states.
 - Require a reason for final impact decisions.
 - Record reviewer, timestamp, evidence, and change history.
-- Never overwrite earlier decisions silently.
+- Preserve earlier decisions instead of overwriting them silently.
 
-### 4. CISA KEV enrichment
+### 3. CISA KEV enrichment
 
 - Download and normalize the official KEV catalog.
 - Mark findings with known exploitation.
-- Show source and feed freshness.
-- Use KEV as prioritization context, not as proof that a product is affected.
+- Display source and feed freshness.
+- Treat KEV as prioritization context—not proof that a product is affected.
 
-### 5. First stable workflow release
+### 4. Stable operator workflow
 
-- Integrate SBOM import, persistent findings, assessments, and KEV in both the
-  dashboard and scriptable CLI.
+- Expose import, findings, assessments, and KEV consistently in the dashboard
+  and scriptable CLI.
 - Add safe database backup and migration guidance.
 - Publish end-to-end demo data and operator documentation.
 
 ## Offline and air-gapped operation
 
-This comes after the online workflow is correct. Until these items ship,
-PSIRTMap is local-first but its OSV scan requires internet access.
+PSIRTMap is local-first today; its OSV scans still require internet access.
+Air-gapped operation will ship only after the online matching workflow is
+correct and auditable.
 
-- `feed pull`: download OSV data and CISA KEV on a connected machine.
-- `feed export`: create a versioned bundle with a manifest and checksums.
-- `feed import`: validate and load that bundle in the isolated environment.
-- Match components entirely against the imported local feed.
-- Expose feed source, creation time, import time, and staleness.
-- Design bundle signing and trust policy before promising a secure transfer
-  workflow.
+The planned flow is:
 
-## After the first stable workflow
+```text
+connected machine              isolated environment
+
+feed pull -> feed export  ->  controlled transfer  ->  feed import -> scan
+```
+
+The implementation must provide:
+
+- Versioned bundles with manifests and checksums.
+- OSV data and CISA KEV metadata in a local matching database.
+- Source, creation time, import time, and staleness information.
+- Complete validation before an imported feed becomes active.
+- A documented signing and trust model before secure-transfer claims are made.
+
+## Later
 
 - CycloneDX VEX export from human assessments.
 - SPDX SBOM import.
 - Product support lifecycle and end-of-life metadata.
 - Finding ownership, due dates, fix releases, and evidence attachments.
-- Security advisory generation with explicit human approval.
+- Human-approved security advisory generation.
 - Deployed-device and customer exposure inventory.
-- Regulatory reporting preparation, without automatic submission.
+- Regulatory report preparation without automatic submission.
 
 ## Explicit non-goals for the early product
 
-- Web UI or SaaS hosting.
-- Accounts, teams, authentication, or RBAC.
-- Network, container, or firmware reverse-engineering scanners.
-- Automatic patching or automatic regulatory submission.
-- Jira, Slack, or other workflow integrations.
-- AI, ML, or autonomous agents.
-- Microservices, Redis, or Kubernetes.
+Keeping the boundary clear is part of the product strategy. Early PSIRTMap is
+not intended to become:
+
+- A web UI or hosted SaaS.
+- An identity, team, authentication, or RBAC system.
+- A network, container, or firmware reverse-engineering scanner.
+- An automatic patching or regulatory-submission service.
+- A Jira or Slack integration hub.
+- An AI, ML, or autonomous-agent product.
+- A microservice, Redis, or Kubernetes deployment.
 
 The core model remains:
 

@@ -6,6 +6,19 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Structured GitHub issue forms for reproducible bug reports and product
+  feedback.
+- A repository-owned terminal dashboard preview and SolonGate PSIRTMap logo.
+
+### Changed
+
+- Reorganized the README around the shipped product workflow, current
+  limitations, installation, and a 60-second quick start.
+- Reworked the roadmap, contribution guide, security policy, and third-party
+  notices for clarity and consistency with the current release.
+
 ## [0.0.3] - 2026-09-29
 
 ### Added

@@ -1,205 +1,207 @@
+<table align="center">
+  <tr>
+    <td align="center" bgcolor="#0d1117">
+      <img src="docs/assets/solongate-psirtmap-logo.png" alt="SolonGate PSIRTMap" width="430">
+    </td>
+  </tr>
+</table>
+
+<div align="center">
+
 # PSIRTMap
 
-Open-source vulnerability impact tracking for shipped products.
+**Map newly disclosed vulnerabilities to the product versions you have actually shipped.**
 
-PSIRTMap is not another vulnerability scanner. It maps newly disclosed
-vulnerabilities to the versions of products you have actually shipped.
+Local-first product-security inventory and impact analysis for device,
+firmware, and embedded-software manufacturers.
 
-Built for device, firmware, and embedded-software manufacturers. Local-first,
-CLI-first, and written in Go. Offline feed support is planned.
+[![Release](https://img.shields.io/github/v/release/solongate/psirtmap?style=flat-square&color=7c6cff)](https://github.com/solongate/psirtmap/releases/latest)
+[![CI](https://img.shields.io/github/actions/workflow/status/solongate/psirtmap/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/solongate/psirtmap/actions/workflows/ci.yml)
+[![Go](https://img.shields.io/badge/Go-1.27%2B-00ADD8?style=flat-square&logo=go&logoColor=white)](go.mod)
+[![License](https://img.shields.io/github/license/solongate/psirtmap?style=flat-square)](LICENSE)
 
-## Current milestone: v0.0.3
+</div>
 
-PSIRTMap now includes a full-screen terminal dashboard for managing the local
-inventory and scanning shipped releases without memorizing commands. The
-scriptable commands remain available for automation.
+![PSIRTMap terminal dashboard](docs/assets/dashboard.svg)
 
-## Interactive dashboard
+> [!IMPORTANT]
+> PSIRTMap is pre-1.0. Inventory data is local, but vulnerability scans
+> currently query the OSV API over the internet. Offline feeds, CycloneDX
+> import, persistent findings, and human assessments are planned—not shipped.
 
-Run PSIRTMap in an interactive terminal:
+## Why PSIRTMap?
 
-```console
-$ psirtmap
-```
+A package scanner can tell you that `openssl@3.0.8` matches a vulnerability.
+PSIRTMap is built to answer the product-security question that follows:
 
-You can also launch the dashboard explicitly, including with a separate test
-database:
+> Which versions of the products we shipped may contain that component?
 
-```console
-$ psirtmap dashboard
-$ psirtmap --database ./demo.db dashboard
-```
+| | Package scanner | PSIRTMap |
+|---|---|---|
+| Primary object | Image, filesystem, or package | Product release |
+| Core question | Is this package version vulnerable? | Which shipped releases may be affected? |
+| Result | Package-level match | Release-level finding that needs human review |
 
-The dashboard provides:
+PSIRTMap deliberately reports matches as **potential impact**. A version match
+is useful evidence; it is not proof that a shipped product is exploitable.
 
-- A live overview of products, releases, and components in local SQLite.
-- Browsable product, release, and component inventories.
-- Guided forms for creating products, releases, and components.
-- Release selection and live OSV scanning with review-safe wording.
-- Responsive wide and compact terminal layouts.
+## What works today
 
-Main keys:
+The current release, `v0.0.3`, includes:
 
-```text
-↑/↓ or j/k   move through sections or rows
-←/→ or h/l   focus navigation or content
-1–5            open a section directly
-n              create an item in the current section
-s or Enter     scan the selected release
-r              refresh the local inventory
-?              show keyboard help
-q              quit
-```
+- A responsive, keyboard-driven terminal dashboard.
+- Local SQLite inventory for products, releases, and components.
+- Guided product, release, and component creation.
+- Live release scanning through OSV package-version queries.
+- Human-readable and deterministic JSON output.
+- Single-binary builds for macOS, Linux, and Windows.
+- No account, database server, or PSIRTMap cloud service.
 
-The dashboard and regular commands use the same database. Nothing is uploaded
-to a PSIRTMap cloud service.
-
-## Scriptable CLI quick start
-
-Initialize the local SQLite database:
-
-```console
-$ psirtmap init
-Initialized PSIRTMap database:
-/Users/you/.psirtmap/psirtmap.db
-```
-
-Create a product and a shipped release:
-
-```console
-$ psirtmap product add AG-200 --description "Industrial gateway"
-Created product:
-AG-200
-
-$ psirtmap release add AG-200 2.2
-Created release:
-AG-200@2.2
-```
-
-Record the components in that release. OSV ecosystem names are case-sensitive:
-
-```console
-$ psirtmap component add AG-200@2.2 openssl@3.0.8 --ecosystem Alpine
-$ psirtmap component add AG-200@2.2 busybox@1.36.0 --ecosystem Alpine
-```
-
-Inspect and scan the release:
-
-```console
-$ psirtmap component list AG-200@2.2
-ECOSYSTEM  COMPONENT  VERSION
-Alpine     busybox    1.36.0
-Alpine     openssl    3.0.8
-
-$ psirtmap scan AG-200@2.2
-PRODUCT RELEASE
-AG-200 2.2
-
-COMPONENTS
-2
-
-POTENTIAL FINDINGS
-...
-```
-
-Every match is reported as `needs-review`: a package-version match is evidence
-of potential impact, not proof that the shipped product is exploitable.
-
-The original one-package OSV query remains available:
-
-```console
-$ psirtmap check jinja2 2.4.1 --ecosystem PyPI
-Package: jinja2@2.4.1
-Ecosystem: PyPI
-
-Found N OSV vulnerability records.
-
-PYSEC-...
-  ...
-```
-
-A package name alone is not enough to identify a package safely, so
-`--ecosystem` is required.
-
-Inventory lists, create commands, `check`, and `scan` support machine-readable
-output with `--json`:
-
-```console
-$ psirtmap product list --json
-$ psirtmap scan AG-200@2.2 --json
-```
-
-Run `psirtmap help` or `psirtmap <command> --help` for the complete CLI usage.
-
-## Local database
-
-The default database is `~/.psirtmap/psirtmap.db`. PSIRTMap creates it with
-permissions `0600` and automatically applies compatible schema migrations.
-There is no database server, account, or cloud service.
-
-Use another database for testing or separate inventories:
-
-```sh
-psirtmap --database ./demo.db product list
-```
-
-The `PSIRTMAP_DB` environment variable can also set the path. The explicit
-`--database` option takes precedence.
+See the [roadmap](ROADMAP.md) for the ordered path to SBOM import, finding
+history, assessments, CISA KEV enrichment, offline feeds, and VEX.
 
 ## Install
 
-Download the archive for your operating system from the
-[latest release](https://github.com/solongate/psirtmap/releases/latest), then
-verify it against `checksums.txt` before extracting it.
+Download the archive for your platform from the
+[latest release](https://github.com/solongate/psirtmap/releases/latest) and
+verify it with the published `checksums.txt` file.
 
-Go users can install the latest tagged version directly:
+Go users can install the latest tagged release directly:
 
 ```sh
 go install github.com/solongate/psirtmap@latest
 ```
 
-## Build and test
+PSIRTMap requires no SQLite installation or background service.
 
-PSIRTMap requires Go 1.27 or newer. SQLite is embedded in the resulting binary,
-so users do not need to install SQLite or any other runtime service.
+## Start in 60 seconds
+
+Open the dashboard:
+
+```console
+$ psirtmap
+```
+
+The first run creates `~/.psirtmap/psirtmap.db`. Use `n` to create a product,
+then add a release and its components. Open **Scanner**, select a release, and
+press `s`.
+
+| Key | Action |
+|---|---|
+| `↑` / `↓` or `j` / `k` | Move through sections or rows |
+| `←` / `→` or `h` / `l` | Move between navigation and content |
+| `1`–`5` | Open a section directly |
+| `n` | Create an item in the current section |
+| `s` or `Enter` | Scan the selected release |
+| `r` | Refresh local inventory |
+| `?` | Show keyboard help |
+| `q` | Quit |
+
+Launch explicitly or use an isolated database:
+
+```sh
+psirtmap dashboard
+psirtmap --database ./demo.db dashboard
+```
+
+<details>
+<summary><strong>Prefer scriptable commands?</strong></summary>
+
+The dashboard and CLI operate on the same local database.
+
+```sh
+psirtmap product add AG-200 --description "Industrial gateway"
+psirtmap release add AG-200 2.2
+
+psirtmap component add AG-200@2.2 openssl@3.0.8 --ecosystem Alpine
+psirtmap component add AG-200@2.2 busybox@1.36.0 --ecosystem Alpine
+
+psirtmap scan AG-200@2.2
+```
+
+Query one package without adding it to the inventory:
+
+```sh
+psirtmap check jinja2 2.4.1 --ecosystem PyPI
+```
+
+Use JSON output in scripts:
+
+```sh
+psirtmap product list --json
+psirtmap scan AG-200@2.2 --json
+```
+
+Run `psirtmap help` or `psirtmap <command> --help` for complete usage.
+
+</details>
+
+## How it works
+
+```text
+Product -> Release -> Component -> Vulnerability match -> Human review
+```
+
+For example:
+
+```text
+AG-200
+└── 2.2
+    └── OpenSSL 3.0.8
+        └── CVE / OSV match
+            └── NEEDS REVIEW
+```
+
+During a scan, PSIRTMap sends the component's ecosystem, package name, and
+version to OSV. The product name, release name, descriptions, and full local
+inventory are not sent to a PSIRTMap service.
+
+The explicit data model is:
+
+```text
+PRODUCT -> RELEASE -> COMPONENT -> VULNERABILITY -> FINDING -> ASSESSMENT
+```
+
+The final three objects are the next product milestone. Today, scan results
+are displayed but are not yet persisted as assessment records.
+
+## Local data
+
+The default database is `~/.psirtmap/psirtmap.db`. PSIRTMap creates it with
+permissions `0600` and applies compatible schema migrations automatically.
+
+Choose another database with either:
+
+```sh
+psirtmap --database ./demo.db dashboard
+PSIRTMAP_DB=./demo.db psirtmap product list
+```
+
+The explicit `--database` option takes precedence over `PSIRTMAP_DB`.
+
+## Build from source
+
+PSIRTMap requires Go 1.27 or newer.
 
 ```sh
 go test ./...
 go test -race -count=1 ./...
 go vet ./...
 go build -o psirtmap .
-./psirtmap --database ./demo.db init
 ```
 
-CI runs formatting, vet, race-enabled tests, and a clean build for every pull
-request.
+CI verifies formatting, dependencies, static analysis, race-enabled tests, and
+release builds for macOS, Linux, and Windows.
 
-## Product direction
+## Project information
 
-The product scope remains deliberately narrow:
-
-1. Create products and releases.
-2. Import CycloneDX JSON SBOMs.
-3. Keep component inventory locally.
-4. Synchronize OSV vulnerability data and CISA KEV metadata.
-5. Match components to vulnerabilities and shipped product releases.
-6. Record human impact assessments.
-
-The core model is:
-
-```text
-PRODUCT -> RELEASE -> COMPONENT -> VULNERABILITY -> FINDING -> ASSESSMENT
-```
-
-PSIRTMap reports a package-version match as **potentially affected**. A human
-review determines whether the shipped product is actually affected.
-
-Today, `scan` queries OSV live. Persisted vulnerability feeds, CISA KEV
-enrichment, CycloneDX import, findings history, and human assessments are the
-next milestones; the CLI does not pretend those features exist yet. See
-[ROADMAP.md](ROADMAP.md) for the ordered delivery plan and explicit non-goals.
+- [Roadmap](ROADMAP.md) — product direction and explicit non-goals
+- [Security policy](SECURITY.md) — private vulnerability reporting
+- [Contributing](CONTRIBUTING.md) — issue and pull-request policy
+- [Changelog](CHANGELOG.md) — release history
 
 ## License
 
-Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE),
-[NOTICE](NOTICE), and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Copyright 2026 SolonGate. Licensed under the
+[Apache License 2.0](LICENSE). See [NOTICE](NOTICE) and
+[third-party notices](THIRD_PARTY_NOTICES.md).

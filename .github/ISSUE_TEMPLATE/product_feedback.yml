@@ -1,0 +1,61 @@
+name: Product feedback
+description: Describe a PSIRT workflow or product-security problem PSIRTMap should address.
+title: "[Feedback] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        PSIRTMap is intentionally narrow. The most useful feedback starts with the product-security workflow and desired outcome, not a proposed technology.
+
+  - type: dropdown
+    id: workflow
+    attributes:
+      label: Workflow area
+      options:
+        - Product and release inventory
+        - SBOM import
+        - Vulnerability matching
+        - Finding review and assessment
+        - CISA KEV prioritization
+        - Offline or air-gapped operation
+        - VEX export
+        - CLI or dashboard usability
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is difficult, slow, error-prone, or missing in the current workflow?
+    validations:
+      required: true
+
+  - type: textarea
+    id: current_process
+    attributes:
+      label: Current process
+      description: How is this handled today, and by whom?
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: What should an operator be able to decide or complete?
+    validations:
+      required: true
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Relevant constraints
+      description: Examples include air-gapped networks, large SBOMs, long-lived firmware, or audit requirements.
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Data safety
+      options:
+        - label: I removed customer data, proprietary SBOM content, credentials, and unrelated secrets.
+          required: true
