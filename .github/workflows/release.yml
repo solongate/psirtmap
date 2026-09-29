@@ -1,0 +1,88 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Verify tag and source version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          source_version="$(go run . version)"
+          if [[ "$tag_version" != "$source_version" ]]; then
+            echo "tag version $tag_version does not match source version $source_version"
+            exit 1
+          fi
+
+      - name: Verify source
+        run: |
+          go vet ./...
+          go test -race -count=1 ./...
+
+      - name: Build release archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p build dist
+
+          build_archive() {
+            local os="$1"
+            local arch="$2"
+            local package="psirtmap_${version}_${os}_${arch}"
+            local binary="psirtmap"
+
+            if [[ "$os" == "windows" ]]; then
+              binary="psirtmap.exe"
+            fi
+
+            mkdir -p "build/$package"
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
+              go build -trimpath -ldflags="-s -w" \
+              -o "build/$package/$binary" .
+            cp LICENSE NOTICE README.md "build/$package/"
+
+            if [[ "$os" == "windows" ]]; then
+              (cd build && zip -qr "../dist/$package.zip" "$package")
+            else
+              tar -C build -czf "dist/$package.tar.gz" "$package"
+            fi
+          }
+
+          build_archive darwin arm64
+          build_archive darwin amd64
+          build_archive linux arm64
+          build_archive linux amd64
+          build_archive windows amd64
+
+          (cd dist && sha256sum ./* > checksums.txt)
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --verify-tag \
+            --title "PSIRTMap $GITHUB_REF_NAME" \
+            --generate-notes

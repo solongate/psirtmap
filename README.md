@@ -33,6 +33,18 @@ Machine-readable output is available with `--json`:
 $ psirtmap check lodash 4.17.20 --ecosystem npm --json
 ```
 
+## Install
+
+Download the archive for your operating system from the
+[latest release](https://github.com/solongate/psirtmap/releases/latest), then
+verify it against `checksums.txt` before extracting it.
+
+Go users can install the latest tagged version directly:
+
+```sh
+go install github.com/solongate/psirtmap@latest
+```
+
 ## Build and test
 
 PSIRTMap currently requires Go 1.27 or newer and has no third-party runtime

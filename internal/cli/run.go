@@ -12,7 +12,7 @@ import (
 	"github.com/solongate/psirtmap/internal/osv"
 )
 
-const version = "0.0.1-dev"
+const version = "0.0.1"
 
 // VulnerabilityQuerier is implemented by the OSV client.
 type VulnerabilityQuerier interface {
