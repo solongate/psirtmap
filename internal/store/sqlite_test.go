@@ -3,12 +3,15 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/solongate/psirtmap/internal/osv"
 )
 
 func TestInventoryLifecyclePersists(t *testing.T) {
@@ -341,5 +344,116 @@ func TestSchemaVersionOneMigratesWithoutLosingComponents(t *testing.T) {
 	}
 	if version != schemaVersion {
 		t.Fatalf("schema version = %d, want %d", version, schemaVersion)
+	}
+}
+
+func TestOSVSnapshotLifecycleIsLocalAndAtomic(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err := database.CreateProduct(ctx, "AG-200", ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, release := range []string{"2.2", "2.3"} {
+		if _, err := database.CreateRelease(ctx, "AG-200", release); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.CreateComponent(ctx, "AG-200", release, "Alpine", "openssl", "3.0.8"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := database.CreateComponent(ctx, "AG-200", "2.3", "Alpine", "busybox", "1.36.0"); err != nil {
+		t.Fatal(err)
+	}
+
+	packages, err := database.ListPackageVersions(ctx)
+	if err != nil || len(packages) != 2 {
+		t.Fatalf("ListPackageVersions() = %+v, %v", packages, err)
+	}
+	openssl := PackageVersion{Ecosystem: "Alpine", Name: "openssl", Version: "3.0.8"}
+	busybox := PackageVersion{Ecosystem: "Alpine", Name: "busybox", Version: "1.36.0"}
+	result, err := database.SaveOSVSnapshot(ctx, []PackageSnapshot{
+		{Package: busybox, Vulnerabilities: []osv.Vulnerability{}},
+		{Package: openssl, Vulnerabilities: []osv.Vulnerability{{
+			ID: "CVE-2026-12345", Aliases: []string{"GHSA-test"}, Summary: "test advisory",
+			Severity: []osv.Severity{{Type: "CVSS_V3", Score: "9.8"}},
+			Affected: []osv.Affected{{
+				Package: osv.Package{Ecosystem: "Alpine", Name: "openssl"},
+				Ranges:  []osv.Range{{Type: "ECOSYSTEM", Events: []osv.RangeEvent{{Introduced: "0"}, {Fixed: "3.0.9"}}}},
+			}},
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("SaveOSVSnapshot() error = %v", err)
+	}
+	if result.Source != "OSV" || result.Packages != 2 || result.Vulnerabilities != 1 || result.SynchronizedAt.IsZero() {
+		t.Fatalf("sync result = %+v", result)
+	}
+
+	vulnerabilities, syncedAt, err := database.LookupOSVSnapshot(ctx, openssl)
+	if err != nil || len(vulnerabilities) != 1 || vulnerabilities[0].ID != "CVE-2026-12345" {
+		t.Fatalf("LookupOSVSnapshot(openssl) = %+v, %v", vulnerabilities, err)
+	}
+	if syncedAt.IsZero() || len(vulnerabilities[0].Affected) != 1 || len(vulnerabilities[0].Aliases) != 1 {
+		t.Fatalf("stored vulnerability = %+v, synced at %v", vulnerabilities[0], syncedAt)
+	}
+	vulnerabilities, _, err = database.LookupOSVSnapshot(ctx, busybox)
+	if err != nil || vulnerabilities == nil || len(vulnerabilities) != 0 {
+		t.Fatalf("LookupOSVSnapshot(busybox) = %#v, %v", vulnerabilities, err)
+	}
+	latest, err := database.LatestVulnerabilitySync(ctx)
+	if err != nil || latest.Packages != 2 || !latest.SynchronizedAt.Equal(result.SynchronizedAt) {
+		t.Fatalf("LatestVulnerabilitySync() = %+v, %v", latest, err)
+	}
+
+	_, err = database.SaveOSVSnapshot(ctx, []PackageSnapshot{{
+		Package: openssl, Vulnerabilities: []osv.Vulnerability{{ID: ""}},
+	}})
+	if err == nil {
+		t.Fatal("invalid SaveOSVSnapshot() error = nil")
+	}
+	vulnerabilities, afterFailure, err := database.LookupOSVSnapshot(ctx, openssl)
+	if err != nil || len(vulnerabilities) != 1 || !afterFailure.Equal(syncedAt) {
+		t.Fatalf("failed update changed snapshot: %+v, %v, %v", vulnerabilities, afterFailure, err)
+	}
+	_, err = database.SaveOSVSnapshot(ctx, []PackageSnapshot{{
+		Package: openssl,
+		Vulnerabilities: []osv.Vulnerability{{
+			ID: "CVE-2026-BROKEN",
+			Affected: []osv.Affected{{
+				Package:           osv.Package{Ecosystem: "Alpine", Name: "openssl"},
+				EcosystemSpecific: json.RawMessage(`{`),
+			}},
+		}},
+	}})
+	if err == nil {
+		t.Fatal("transactional SaveOSVSnapshot() error = nil for malformed affected data")
+	}
+	vulnerabilities, afterFailure, err = database.LookupOSVSnapshot(ctx, openssl)
+	if err != nil || len(vulnerabilities) != 1 || vulnerabilities[0].ID != "CVE-2026-12345" || !afterFailure.Equal(syncedAt) {
+		t.Fatalf("rolled-back update changed snapshot: %+v, %v, %v", vulnerabilities, afterFailure, err)
+	}
+
+	replacement, err := database.SaveOSVSnapshot(ctx, []PackageSnapshot{{Package: busybox, Vulnerabilities: []osv.Vulnerability{}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacement.Packages != 1 || replacement.Vulnerabilities != 0 {
+		t.Fatalf("replacement = %+v", replacement)
+	}
+	if _, _, err := database.LookupOSVSnapshot(ctx, openssl); !errors.Is(err, ErrSnapshotNotFound) {
+		t.Fatalf("stale package lookup error = %v, want ErrSnapshotNotFound", err)
+	}
+	var vulnerabilityRows int
+	if err := database.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM vulnerabilities").Scan(&vulnerabilityRows); err != nil {
+		t.Fatal(err)
+	}
+	if vulnerabilityRows != 0 {
+		t.Fatalf("stale vulnerability rows = %d, want 0", vulnerabilityRows)
 	}
 }

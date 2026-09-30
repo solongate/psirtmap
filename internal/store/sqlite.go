@@ -1,9 +1,11 @@
-// Package store persists PSIRTMap's product inventory in SQLite.
+// Package store persists PSIRTMap's product inventory and local vulnerability
+// intelligence in SQLite.
 package store
 
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -13,10 +15,11 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/solongate/psirtmap/internal/osv"
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 2
+const schemaVersion = 3
 
 const (
 	maxIdentifierLength  = 1024
@@ -29,6 +32,9 @@ var (
 	ErrAlreadyExists = errors.New("already exists")
 	// ErrNotFound is returned when a referenced product or release is missing.
 	ErrNotFound = errors.New("not found")
+	// ErrSnapshotNotFound is returned when a package version has not been
+	// synchronized into the local vulnerability snapshot.
+	ErrSnapshotNotFound = errors.New("local vulnerability snapshot not found")
 )
 
 // DB is a SQLite-backed product inventory.
@@ -89,6 +95,27 @@ type ComponentImportResult struct {
 	CreatedRelease bool   `json:"created_release"`
 	Imported       int    `json:"imported"`
 	AlreadyPresent int    `json:"already_present"`
+}
+
+// PackageVersion is one distinct package identity found in the inventory.
+type PackageVersion struct {
+	Ecosystem string `json:"ecosystem"`
+	Name      string `json:"name"`
+	Version   string `json:"version"`
+}
+
+// PackageSnapshot contains the exact OSV query result for one package version.
+type PackageSnapshot struct {
+	Package         PackageVersion
+	Vulnerabilities []osv.Vulnerability
+}
+
+// VulnerabilitySync summarizes one successfully committed local snapshot.
+type VulnerabilitySync struct {
+	Source          string    `json:"source"`
+	SynchronizedAt  time.Time `json:"synchronized_at"`
+	Packages        int       `json:"packages"`
+	Vulnerabilities int       `json:"vulnerabilities"`
 }
 
 // Open opens a database, creates its parent directory when needed, and applies
@@ -215,6 +242,60 @@ func (d *DB) migrate(ctx context.Context) error {
 			)`,
 			`CREATE INDEX sbom_imports_release_id_idx ON sbom_imports(release_id)`,
 			`PRAGMA user_version = 2`,
+		}
+		for _, statement := range statements {
+			if _, err := transaction.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("apply schema migration: %w", err)
+			}
+		}
+	}
+
+	if currentVersion < 3 {
+		statements := []string{
+			`CREATE TABLE vulnerability_syncs (
+				id INTEGER PRIMARY KEY,
+				source TEXT NOT NULL,
+				synchronized_at TEXT NOT NULL,
+				package_count INTEGER NOT NULL,
+				vulnerability_count INTEGER NOT NULL
+			)`,
+			`CREATE TABLE package_snapshots (
+				id INTEGER PRIMARY KEY,
+				sync_id INTEGER NOT NULL REFERENCES vulnerability_syncs(id),
+				ecosystem TEXT NOT NULL,
+				name TEXT NOT NULL,
+				version TEXT NOT NULL,
+				UNIQUE(ecosystem, name, version)
+			)`,
+			`CREATE TABLE vulnerabilities (
+				id INTEGER PRIMARY KEY,
+				source TEXT NOT NULL,
+				source_id TEXT NOT NULL,
+				summary TEXT NOT NULL DEFAULT '',
+				details TEXT NOT NULL DEFAULT '',
+				published TEXT NOT NULL DEFAULT '',
+				modified TEXT NOT NULL DEFAULT '',
+				withdrawn TEXT NOT NULL DEFAULT '',
+				aliases_json TEXT NOT NULL DEFAULT '[]',
+				severity_json TEXT NOT NULL DEFAULT '[]',
+				affected_json TEXT NOT NULL DEFAULT '[]',
+				updated_at TEXT NOT NULL,
+				UNIQUE(source, source_id)
+			)`,
+			`CREATE TABLE vulnerability_aliases (
+				vulnerability_id INTEGER NOT NULL REFERENCES vulnerabilities(id) ON DELETE CASCADE,
+				alias TEXT NOT NULL,
+				PRIMARY KEY(vulnerability_id, alias)
+			)`,
+			`CREATE TABLE package_vulnerability_matches (
+				package_snapshot_id INTEGER NOT NULL REFERENCES package_snapshots(id) ON DELETE CASCADE,
+				vulnerability_id INTEGER NOT NULL REFERENCES vulnerabilities(id) ON DELETE CASCADE,
+				PRIMARY KEY(package_snapshot_id, vulnerability_id)
+			)`,
+			`CREATE INDEX package_snapshots_sync_id_idx ON package_snapshots(sync_id)`,
+			`CREATE INDEX vulnerability_aliases_alias_idx ON vulnerability_aliases(alias)`,
+			`CREATE INDEX package_vulnerability_matches_vulnerability_idx ON package_vulnerability_matches(vulnerability_id)`,
+			`PRAGMA user_version = 3`,
 		}
 		for _, statement := range statements {
 			if _, err := transaction.ExecContext(ctx, statement); err != nil {
@@ -677,6 +758,256 @@ func (d *DB) ListAllComponents(ctx context.Context) ([]Component, error) {
 		return nil, fmt.Errorf("list all components: %w", err)
 	}
 	return components, nil
+}
+
+// ListPackageVersions returns the unique package versions present anywhere in
+// the shipped-product inventory.
+func (d *DB) ListPackageVersions(ctx context.Context) ([]PackageVersion, error) {
+	rows, err := d.db.QueryContext(ctx, `SELECT DISTINCT ecosystem, name, version
+		FROM components ORDER BY ecosystem, name, version`)
+	if err != nil {
+		return nil, fmt.Errorf("list package versions: %w", err)
+	}
+	defer rows.Close()
+
+	packages := make([]PackageVersion, 0)
+	for rows.Next() {
+		var pkg PackageVersion
+		if err := rows.Scan(&pkg.Ecosystem, &pkg.Name, &pkg.Version); err != nil {
+			return nil, fmt.Errorf("read package version: %w", err)
+		}
+		packages = append(packages, pkg)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list package versions: %w", err)
+	}
+	return packages, nil
+}
+
+// SaveOSVSnapshot atomically replaces the active package-version snapshot.
+// Callers must fetch every package successfully before invoking it, so a
+// network failure can never leave a partially updated local feed.
+func (d *DB) SaveOSVSnapshot(ctx context.Context, snapshots []PackageSnapshot) (VulnerabilitySync, error) {
+	result := VulnerabilitySync{
+		Source:         "OSV",
+		SynchronizedAt: time.Now().UTC().Truncate(time.Second),
+		Packages:       len(snapshots),
+	}
+	seenPackages := make(map[PackageVersion]struct{}, len(snapshots))
+	seenVulnerabilities := make(map[string]struct{})
+	for _, snapshot := range snapshots {
+		pkg := snapshot.Package
+		if _, exists := seenPackages[pkg]; exists {
+			return VulnerabilitySync{}, fmt.Errorf("duplicate package snapshot %s:%s@%s", pkg.Ecosystem, pkg.Name, pkg.Version)
+		}
+		seenPackages[pkg] = struct{}{}
+		for _, vulnerability := range snapshot.Vulnerabilities {
+			if strings.TrimSpace(vulnerability.ID) == "" {
+				return VulnerabilitySync{}, errors.New("OSV vulnerability ID is required")
+			}
+			seenVulnerabilities[vulnerability.ID] = struct{}{}
+		}
+	}
+	result.Vulnerabilities = len(seenVulnerabilities)
+
+	transaction, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return VulnerabilitySync{}, fmt.Errorf("begin OSV snapshot: %w", err)
+	}
+	defer transaction.Rollback()
+
+	insert, err := transaction.ExecContext(ctx, `INSERT INTO vulnerability_syncs(
+		source, synchronized_at, package_count, vulnerability_count
+	) VALUES (?, ?, ?, ?)`, result.Source, formatTime(result.SynchronizedAt), result.Packages, result.Vulnerabilities)
+	if err != nil {
+		return VulnerabilitySync{}, fmt.Errorf("record OSV sync: %w", err)
+	}
+	syncID, err := insert.LastInsertId()
+	if err != nil {
+		return VulnerabilitySync{}, fmt.Errorf("read OSV sync ID: %w", err)
+	}
+	if _, err := transaction.ExecContext(ctx, "DELETE FROM package_snapshots"); err != nil {
+		return VulnerabilitySync{}, fmt.Errorf("replace package snapshots: %w", err)
+	}
+
+	for _, snapshot := range snapshots {
+		packageInsert, insertErr := transaction.ExecContext(ctx, `INSERT INTO package_snapshots(
+			sync_id, ecosystem, name, version
+		) VALUES (?, ?, ?, ?)`, syncID, snapshot.Package.Ecosystem, snapshot.Package.Name, snapshot.Package.Version)
+		if insertErr != nil {
+			return VulnerabilitySync{}, fmt.Errorf("store package snapshot %s@%s: %w", snapshot.Package.Name, snapshot.Package.Version, insertErr)
+		}
+		packageID, insertErr := packageInsert.LastInsertId()
+		if insertErr != nil {
+			return VulnerabilitySync{}, fmt.Errorf("read package snapshot ID: %w", insertErr)
+		}
+
+		for _, vulnerability := range snapshot.Vulnerabilities {
+			aliasesJSON, marshalErr := json.Marshal(nonNilStrings(vulnerability.Aliases))
+			if marshalErr != nil {
+				return VulnerabilitySync{}, fmt.Errorf("encode aliases for %s: %w", vulnerability.ID, marshalErr)
+			}
+			severityJSON, marshalErr := json.Marshal(nonNilSeverities(vulnerability.Severity))
+			if marshalErr != nil {
+				return VulnerabilitySync{}, fmt.Errorf("encode severity for %s: %w", vulnerability.ID, marshalErr)
+			}
+			affectedJSON, marshalErr := json.Marshal(nonNilAffected(vulnerability.Affected))
+			if marshalErr != nil {
+				return VulnerabilitySync{}, fmt.Errorf("encode affected data for %s: %w", vulnerability.ID, marshalErr)
+			}
+			_, insertErr = transaction.ExecContext(ctx, `INSERT INTO vulnerabilities(
+				source, source_id, summary, details, published, modified, withdrawn,
+				aliases_json, severity_json, affected_json, updated_at
+			) VALUES ('OSV', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(source, source_id) DO UPDATE SET
+				summary = excluded.summary,
+				details = excluded.details,
+				published = excluded.published,
+				modified = excluded.modified,
+				withdrawn = excluded.withdrawn,
+				aliases_json = excluded.aliases_json,
+				severity_json = excluded.severity_json,
+				affected_json = excluded.affected_json,
+				updated_at = excluded.updated_at`,
+				vulnerability.ID, vulnerability.Summary, vulnerability.Details,
+				vulnerability.Published, vulnerability.Modified, vulnerability.Withdrawn,
+				string(aliasesJSON), string(severityJSON), string(affectedJSON), formatTime(result.SynchronizedAt))
+			if insertErr != nil {
+				return VulnerabilitySync{}, fmt.Errorf("store vulnerability %s: %w", vulnerability.ID, insertErr)
+			}
+
+			var vulnerabilityID int64
+			if err := transaction.QueryRowContext(ctx,
+				"SELECT id FROM vulnerabilities WHERE source = 'OSV' AND source_id = ?", vulnerability.ID,
+			).Scan(&vulnerabilityID); err != nil {
+				return VulnerabilitySync{}, fmt.Errorf("read vulnerability %s: %w", vulnerability.ID, err)
+			}
+			if _, err := transaction.ExecContext(ctx, "DELETE FROM vulnerability_aliases WHERE vulnerability_id = ?", vulnerabilityID); err != nil {
+				return VulnerabilitySync{}, fmt.Errorf("replace aliases for %s: %w", vulnerability.ID, err)
+			}
+			for _, alias := range vulnerability.Aliases {
+				if _, err := transaction.ExecContext(ctx,
+					"INSERT OR IGNORE INTO vulnerability_aliases(vulnerability_id, alias) VALUES (?, ?)", vulnerabilityID, alias,
+				); err != nil {
+					return VulnerabilitySync{}, fmt.Errorf("store alias for %s: %w", vulnerability.ID, err)
+				}
+			}
+			if _, err := transaction.ExecContext(ctx, `INSERT OR IGNORE INTO package_vulnerability_matches(
+				package_snapshot_id, vulnerability_id
+			) VALUES (?, ?)`, packageID, vulnerabilityID); err != nil {
+				return VulnerabilitySync{}, fmt.Errorf("store match for %s: %w", vulnerability.ID, err)
+			}
+		}
+	}
+	if _, err := transaction.ExecContext(ctx, `DELETE FROM vulnerabilities
+		WHERE id NOT IN (SELECT vulnerability_id FROM package_vulnerability_matches)`); err != nil {
+		return VulnerabilitySync{}, fmt.Errorf("remove stale vulnerabilities: %w", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return VulnerabilitySync{}, fmt.Errorf("commit OSV snapshot: %w", err)
+	}
+	return result, nil
+}
+
+// LookupOSVSnapshot returns the cached exact-match result and its sync time.
+func (d *DB) LookupOSVSnapshot(ctx context.Context, pkg PackageVersion) ([]osv.Vulnerability, time.Time, error) {
+	var packageID int64
+	var synchronizedAt string
+	err := d.db.QueryRowContext(ctx, `SELECT ps.id, vs.synchronized_at
+		FROM package_snapshots ps
+		JOIN vulnerability_syncs vs ON vs.id = ps.sync_id
+		WHERE ps.ecosystem = ? AND ps.name = ? AND ps.version = ?`, pkg.Ecosystem, pkg.Name, pkg.Version,
+	).Scan(&packageID, &synchronizedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, time.Time{}, fmt.Errorf("%s:%s@%s: %w", pkg.Ecosystem, pkg.Name, pkg.Version, ErrSnapshotNotFound)
+	}
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("find local OSV snapshot: %w", err)
+	}
+	syncedAt, err := parseTime(synchronizedAt)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+
+	rows, err := d.db.QueryContext(ctx, `SELECT
+		v.source_id, v.summary, v.details, v.published, v.modified, v.withdrawn,
+		v.aliases_json, v.severity_json, v.affected_json
+		FROM package_vulnerability_matches pvm
+		JOIN vulnerabilities v ON v.id = pvm.vulnerability_id
+		WHERE pvm.package_snapshot_id = ?
+		ORDER BY v.source_id`, packageID)
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("read local OSV matches: %w", err)
+	}
+	defer rows.Close()
+	vulnerabilities := make([]osv.Vulnerability, 0)
+	for rows.Next() {
+		var vulnerability osv.Vulnerability
+		var aliasesJSON, severityJSON, affectedJSON string
+		if err := rows.Scan(
+			&vulnerability.ID, &vulnerability.Summary, &vulnerability.Details,
+			&vulnerability.Published, &vulnerability.Modified, &vulnerability.Withdrawn,
+			&aliasesJSON, &severityJSON, &affectedJSON,
+		); err != nil {
+			return nil, time.Time{}, fmt.Errorf("read local OSV vulnerability: %w", err)
+		}
+		if err := json.Unmarshal([]byte(aliasesJSON), &vulnerability.Aliases); err != nil {
+			return nil, time.Time{}, fmt.Errorf("decode aliases for %s: %w", vulnerability.ID, err)
+		}
+		if err := json.Unmarshal([]byte(severityJSON), &vulnerability.Severity); err != nil {
+			return nil, time.Time{}, fmt.Errorf("decode severity for %s: %w", vulnerability.ID, err)
+		}
+		if err := json.Unmarshal([]byte(affectedJSON), &vulnerability.Affected); err != nil {
+			return nil, time.Time{}, fmt.Errorf("decode affected data for %s: %w", vulnerability.ID, err)
+		}
+		vulnerabilities = append(vulnerabilities, vulnerability)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, time.Time{}, fmt.Errorf("read local OSV matches: %w", err)
+	}
+	return vulnerabilities, syncedAt, nil
+}
+
+// LatestVulnerabilitySync returns the most recently committed snapshot.
+func (d *DB) LatestVulnerabilitySync(ctx context.Context) (VulnerabilitySync, error) {
+	var result VulnerabilitySync
+	var synchronizedAt string
+	err := d.db.QueryRowContext(ctx, `SELECT source, synchronized_at, package_count, vulnerability_count
+		FROM vulnerability_syncs ORDER BY id DESC LIMIT 1`).Scan(
+		&result.Source, &synchronizedAt, &result.Packages, &result.Vulnerabilities,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return VulnerabilitySync{}, ErrSnapshotNotFound
+	}
+	if err != nil {
+		return VulnerabilitySync{}, fmt.Errorf("read latest vulnerability sync: %w", err)
+	}
+	result.SynchronizedAt, err = parseTime(synchronizedAt)
+	if err != nil {
+		return VulnerabilitySync{}, err
+	}
+	return result, nil
+}
+
+func nonNilStrings(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
+}
+
+func nonNilSeverities(values []osv.Severity) []osv.Severity {
+	if values == nil {
+		return []osv.Severity{}
+	}
+	return values
+}
+
+func nonNilAffected(values []osv.Affected) []osv.Affected {
+	if values == nil {
+		return []osv.Affected{}
+	}
+	return values
 }
 
 func (d *DB) productID(ctx context.Context, name string) (int64, string, error) {

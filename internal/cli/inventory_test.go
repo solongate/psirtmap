@@ -113,9 +113,17 @@ func TestInventoryCLIWorkflowAndScan(t *testing.T) {
 		t.Fatalf("release list stdout = %q", stdout)
 	}
 
+	exitCode, stdout, stderr = runWithDatabase(t, path, querier, "sync")
+	requireSuccess(t, exitCode, stderr)
+	for _, expected := range []string{"VULNERABILITY DATA UPDATED", "Packages         2", "Vulnerabilities  2"} {
+		if !strings.Contains(stdout, expected) {
+			t.Errorf("sync stdout = %q, want %q", stdout, expected)
+		}
+	}
+
 	exitCode, stdout, stderr = runWithDatabase(t, path, querier, "scan", "AG-200@2.2")
 	requireSuccess(t, exitCode, stderr)
-	for _, expected := range []string{"POTENTIAL FINDINGS\n2", "OSV-2026-A", "OSV-2026-B", "needs-review"} {
+	for _, expected := range []string{"Local OSV snapshot", "POTENTIAL FINDINGS\n2", "OSV-2026-A", "OSV-2026-B", "needs-review"} {
 		if !strings.Contains(stdout, expected) {
 			t.Errorf("scan stdout = %q, want %q", stdout, expected)
 		}
@@ -277,7 +285,7 @@ func TestScanReportsComponentQueryFailure(t *testing.T) {
 		requireSuccess(t, exitCode, stderr)
 	}
 
-	exitCode, _, stderr := runWithDatabase(t, path, querier, "scan", "gateway@1.0")
+	exitCode, _, stderr := runWithDatabase(t, path, querier, "scan", "gateway@1.0", "--live")
 	if exitCode != 1 {
 		t.Fatalf("exit code = %d, want 1", exitCode)
 	}
@@ -285,6 +293,65 @@ func TestScanReportsComponentQueryFailure(t *testing.T) {
 		if !strings.Contains(stderr, expected) {
 			t.Errorf("stderr = %q, want %q", stderr, expected)
 		}
+	}
+}
+
+func TestSyncFailurePreservesPreviousLocalSnapshot(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "inventory.db")
+	querier := &inventoryQuerier{results: map[string]packageResult{
+		"npm:pkg@1.0": {vulnerabilities: []osv.Vulnerability{{ID: "CVE-2026-OLD"}}},
+	}}
+	for _, arguments := range [][]string{
+		{"product", "add", "gateway"},
+		{"release", "add", "gateway", "1.0"},
+		{"component", "add", "gateway@1.0", "pkg@1.0", "-e", "npm"},
+		{"sync"},
+	} {
+		exitCode, _, stderr := runWithDatabase(t, path, querier, arguments...)
+		requireSuccess(t, exitCode, stderr)
+	}
+
+	querier.mu.Lock()
+	querier.results["npm:pkg@1.0"] = packageResult{err: errors.New("OSV unavailable")}
+	querier.mu.Unlock()
+	exitCode, _, stderr := runWithDatabase(t, path, querier, "sync")
+	if exitCode != 1 || !strings.Contains(stderr, "OSV unavailable") {
+		t.Fatalf("failed sync = code %d, stderr %q", exitCode, stderr)
+	}
+
+	exitCode, stdout, stderr := runWithDatabase(t, path, querier, "scan", "gateway@1.0", "--json")
+	requireSuccess(t, exitCode, stderr)
+	if !strings.Contains(stdout, `"id": "CVE-2026-OLD"`) || !strings.Contains(stdout, `"data_source": "local-osv-snapshot"`) {
+		t.Fatalf("local scan after failed sync = %q", stdout)
+	}
+}
+
+func TestScanRequiresLocalSnapshotUnlessLive(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "inventory.db")
+	querier := &inventoryQuerier{results: map[string]packageResult{
+		"npm:pkg@1.0": {vulnerabilities: []osv.Vulnerability{{ID: "CVE-2026-LIVE"}}},
+	}}
+	for _, arguments := range [][]string{
+		{"product", "add", "gateway"},
+		{"release", "add", "gateway", "1.0"},
+		{"component", "add", "gateway@1.0", "pkg@1.0", "-e", "npm"},
+	} {
+		exitCode, _, stderr := runWithDatabase(t, path, querier, arguments...)
+		requireSuccess(t, exitCode, stderr)
+	}
+
+	exitCode, _, stderr := runWithDatabase(t, path, querier, "scan", "gateway@1.0")
+	if exitCode != 1 || !strings.Contains(stderr, "run \"psirtmap sync\"") {
+		t.Fatalf("unsynchronized scan = code %d, stderr %q", exitCode, stderr)
+	}
+	exitCode, stdout, stderr := runWithDatabase(t, path, querier, "scan", "--live", "gateway@1.0")
+	requireSuccess(t, exitCode, stderr)
+	if !strings.Contains(stdout, "OSV live query") || !strings.Contains(stdout, "CVE-2026-LIVE") {
+		t.Fatalf("live scan stdout = %q", stdout)
 	}
 }
 
@@ -308,7 +375,7 @@ func TestGlobalDatabaseOptionValidation(t *testing.T) {
 func TestInventoryHelpDoesNotCreateDatabase(t *testing.T) {
 	t.Parallel()
 
-	for _, command := range []string{"init", "product", "release", "component", "scan", "dashboard", "ui"} {
+	for _, command := range []string{"init", "product", "release", "component", "sync", "scan", "dashboard", "ui"} {
 		command := command
 		t.Run(command, func(t *testing.T) {
 			t.Parallel()
@@ -336,7 +403,7 @@ func TestRootCommandsAndUsageErrors(t *testing.T) {
 		useStderr  bool
 	}{
 		{name: "root help", args: []string{"--help"}, wantCode: 0, wantOutput: "Inventory commands:"},
-		{name: "version", args: []string{"version"}, wantCode: 0, wantOutput: "0.0.4"},
+		{name: "version", args: []string{"version"}, wantCode: 0, wantOutput: "0.0.5"},
 		{name: "unknown", args: []string{"wat"}, wantCode: 2, wantOutput: "unknown command", useStderr: true},
 		{name: "missing database value", args: []string{"--database"}, wantCode: 2, wantOutput: "requires a value", useStderr: true},
 	}

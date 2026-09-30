@@ -25,9 +25,10 @@ firmware, and embedded-software manufacturers.
 ![PSIRTMap terminal dashboard](docs/assets/dashboard.svg)
 
 > [!IMPORTANT]
-> PSIRTMap is pre-1.0. Inventory data is local, but vulnerability scans
-> currently query the OSV API over the internet. Offline feeds, persistent
-> findings, and human assessments are planned—not shipped.
+> PSIRTMap is pre-1.0. Normal release scans use a local OSV snapshot and do not
+> require internet access after `psirtmap sync`. Creating transferable feed
+> bundles for fully isolated environments, persistent findings, and human
+> assessments are planned—not shipped.
 
 ## Why PSIRTMap?
 
@@ -47,13 +48,15 @@ is useful evidence; it is not proof that a shipped product is exploitable.
 
 ## What works today
 
-The current release, `v0.0.4`, includes:
+The current release, `v0.0.5`, includes:
 
 - A responsive, keyboard-driven terminal dashboard.
 - Local SQLite inventory for products, releases, and components.
 - Atomic CycloneDX JSON import with package URL normalization and provenance.
 - Guided product, release, and component creation.
-- Live release scanning through OSV package-version queries.
+- Atomic OSV synchronization for the package versions in the local inventory.
+- Local release scanning with source and snapshot freshness metadata.
+- An explicit `--live` scan mode for direct OSV checks.
 - Human-readable and deterministic JSON output.
 - Single-binary builds for macOS, Linux, and Windows.
 - No account, database server, or PSIRTMap cloud service.
@@ -84,8 +87,8 @@ $ psirtmap
 ```
 
 The first run creates `~/.psirtmap/psirtmap.db`. Use `n` to create a product,
-open **Releases**, and press `i` to import its CycloneDX JSON SBOM. Then open
-**Scanner**, select the release, and press `s`.
+open **Releases**, and press `i` to import its CycloneDX JSON SBOM. Press `u`
+once to update the local OSV snapshot, then open **Scanner** and press `s`.
 
 | Key | Action |
 |---|---|
@@ -94,6 +97,7 @@ open **Releases**, and press `i` to import its CycloneDX JSON SBOM. Then open
 | `1`–`5` | Open a section directly |
 | `n` | Create an item in the current section |
 | `i` | Import CycloneDX JSON from **Releases** |
+| `u` | Update the local OSV snapshot; this step uses the internet |
 | `s` or `Enter` | Scan the selected release |
 | `r` | Refresh local inventory |
 | `?` | Show keyboard help |
@@ -115,6 +119,7 @@ The dashboard and CLI operate on the same local database.
 psirtmap product add AG-200 --description "Industrial gateway"
 psirtmap release import AG-200@2.2 ./firmware-2.2.cdx.json
 
+psirtmap sync
 psirtmap scan AG-200@2.2
 ```
 
@@ -130,11 +135,18 @@ Query one package without adding it to the inventory:
 psirtmap check jinja2 2.4.1 --ecosystem PyPI
 ```
 
+Use a direct OSV query without changing the saved snapshot:
+
+```sh
+psirtmap scan AG-200@2.2 --live
+```
+
 Use JSON output in scripts:
 
 ```sh
 psirtmap product list --json
 psirtmap release import AG-200@2.2 ./firmware-2.2.cdx.json --json
+psirtmap sync --json
 psirtmap scan AG-200@2.2 --json
 ```
 
@@ -145,7 +157,11 @@ Run `psirtmap help` or `psirtmap <command> --help` for complete usage.
 ## How it works
 
 ```text
-CycloneDX SBOM -> Product release -> Component -> Vulnerability match -> Human review
+CycloneDX SBOM -> Product release -> Component inventory
+                                         |
+OSV API -------- psirtmap sync --------> local OSV snapshot
+                                         |
+                              offline release scan -> Human review
 ```
 
 For example:
@@ -158,9 +174,16 @@ AG-200
             └── NEEDS REVIEW
 ```
 
-During a scan, PSIRTMap sends the component's ecosystem, package name, and
-version to OSV. The product name, release name, descriptions, and full local
-inventory are not sent to a PSIRTMap service.
+During `sync`, PSIRTMap sends each distinct component ecosystem, package name,
+and version to OSV. It stores the matching advisory metadata, aliases,
+severity, affected ranges, retrieval time, and exact package-version match in
+SQLite. Product names, release names, descriptions, and complete SBOM files
+are not sent.
+
+Normal `scan` commands read that saved snapshot and make no OSV request. A new
+or changed component needs another successful `sync`; if any OSV query fails,
+the previous complete snapshot stays active. `check`, `sync`, and
+`scan --live` are the operations that require internet access.
 
 The explicit data model is:
 
@@ -168,14 +191,15 @@ The explicit data model is:
 PRODUCT -> RELEASE -> COMPONENT -> VULNERABILITY -> FINDING -> ASSESSMENT
 ```
 
-The final three objects are the next product milestones. Today, imported
-component identities and SBOM provenance are persisted, while scan results are
-displayed but are not yet stored as assessment records.
+Vulnerability records now live locally. Findings and assessments are the next
+product milestones: scan results are currently displayed but are not yet kept
+as durable workflow records.
 
 ## Local data
 
 The default database is `~/.psirtmap/psirtmap.db`. PSIRTMap creates it with
-permissions `0600` and applies compatible schema migrations automatically.
+permissions `0600` and applies compatible schema migrations automatically. It
+contains both shipped-product inventory and the active OSV snapshot.
 
 Choose another database with either:
 

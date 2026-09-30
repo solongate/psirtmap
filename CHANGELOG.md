@@ -6,6 +6,25 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-09-30
+
+### Added
+
+- `psirtmap sync` for updating an inventory-scoped OSV snapshot in SQLite.
+- Local vulnerability tables for advisories, aliases, severity, affected
+  packages and ranges, exact package-version matches, source, and freshness.
+- Offline-by-default release scanning from the active local snapshot.
+- `psirtmap scan --live` for an explicit direct OSV query without changing the
+  saved snapshot.
+- Dashboard OSV synchronization and local-scan workflow.
+
+### Changed
+
+- OSV synchronization commits atomically only after all inventory package
+  queries succeed; a failed update preserves the previous snapshot.
+- Database schema migrated to version 3 without changing existing inventory.
+- Version advanced to `0.0.5`.
+
 ## [0.0.4] - 2026-09-30
 
 ### Added
@@ -80,7 +99,8 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Human-readable and JSON output.
 - Automated tests, cross-platform release builds, and Apache-2.0 licensing.
 
-[Unreleased]: https://github.com/solongate/psirtmap/compare/v0.0.4...HEAD
+[Unreleased]: https://github.com/solongate/psirtmap/compare/v0.0.5...HEAD
+[0.0.5]: https://github.com/solongate/psirtmap/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/solongate/psirtmap/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/solongate/psirtmap/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/solongate/psirtmap/compare/v0.0.1...v0.0.2

@@ -78,7 +78,7 @@ func TestDashboardLoadsAndRendersRealInventory(t *testing.T) {
 	}
 
 	view := model.View()
-	for _, expected := range []string{"PSIRTMAP", "Overview", "1", "Local inventory", "CycloneDX import", "OSV live queries"} {
+	for _, expected := range []string{"PSIRTMAP", "Overview", "1", "Local inventory", "CycloneDX import", "Local OSV snapshot", "NOT SYNCED"} {
 		if !strings.Contains(view.Content, expected) {
 			t.Errorf("dashboard view does not contain %q", expected)
 		}
@@ -285,7 +285,7 @@ func TestDashboardRendersEverySectionWithInventory(t *testing.T) {
 		{screenProducts, []string{"Products", "AG-200", "Industrial gateway"}},
 		{screenReleases, []string{"Releases", "AG-200@2.2", "1"}},
 		{screenComponents, []string{"Components", "openssl@3.0.8", "Alpine"}},
-		{screenScanner, []string{"Release scanner", "AG-200@2.2", "Press s or Enter"}},
+		{screenScanner, []string{"Release scanner", "AG-200@2.2", "Press u to update"}},
 	}
 	for _, check := range checks {
 		model.screen = check.screen
@@ -349,6 +349,12 @@ func TestDashboardScansSelectedRelease(t *testing.T) {
 	if _, err := database.CreateComponent(ctx, "AG-200", "2.2", "Alpine", "openssl", "3.0.8"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := database.SaveOSVSnapshot(ctx, []store.PackageSnapshot{{
+		Package:         store.PackageVersion{Ecosystem: "Alpine", Name: "openssl", Version: "3.0.8"},
+		Vulnerabilities: []osv.Vulnerability{{ID: "CVE-2026-12345", Summary: "test"}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
 	querier := &dashboardQuerier{result: []osv.Vulnerability{{ID: "CVE-2026-12345", Summary: "test"}}}
 	model := newDashboardModel(ctx, database, querier)
 	loadDashboard(t, model)
@@ -359,7 +365,7 @@ func TestDashboardScansSelectedRelease(t *testing.T) {
 	}
 	model.scanning = true
 	model.Update(message)
-	if model.scanning || model.scan == nil || model.scan.Findings[0].ID != "CVE-2026-12345" || querier.calls != 1 {
+	if model.scanning || model.scan == nil || model.scan.Findings[0].ID != "CVE-2026-12345" || querier.calls != 0 {
 		t.Fatalf("scan state = %+v; calls = %d", model.scan, querier.calls)
 	}
 	model.screen = screenScanner
@@ -387,8 +393,41 @@ func TestDashboardReportsScanFailure(t *testing.T) {
 	message := model.scanRelease(release)().(dashboardScanMsg)
 	model.scanning = true
 	model.Update(message)
-	if !model.statusErr || !strings.Contains(model.status, "offline") || model.scanning {
+	if !model.statusErr || !strings.Contains(model.status, "no local OSV data") || model.scanning {
 		t.Fatalf("status = %q, error = %v, scanning = %v", model.status, model.statusErr, model.scanning)
+	}
+}
+
+func TestDashboardSynchronizesOSVSnapshot(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database := newDashboardTestDatabase(t)
+	if _, err := database.CreateProduct(ctx, "gateway", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateRelease(ctx, "gateway", "1.0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateComponent(ctx, "gateway", "1.0", "npm", "pkg", "1.0"); err != nil {
+		t.Fatal(err)
+	}
+	querier := &dashboardQuerier{result: []osv.Vulnerability{{ID: "CVE-2026-12345"}}}
+	model := newDashboardModel(ctx, database, querier)
+	loadDashboard(t, model)
+
+	message := model.syncSnapshot()().(dashboardSyncMsg)
+	if message.err != nil || message.result.Packages != 1 || message.result.Vulnerabilities != 1 {
+		t.Fatalf("sync message = %+v", message)
+	}
+	model.syncing = true
+	_, refresh := model.Update(message)
+	if model.syncing || model.statusErr || refresh == nil {
+		t.Fatalf("sync state = syncing %v, status %q, error %v", model.syncing, model.status, model.statusErr)
+	}
+	model.Update(refresh())
+	if model.data.sync == nil || querier.calls != 1 {
+		t.Fatalf("dashboard sync = %+v; calls = %d", model.data.sync, querier.calls)
 	}
 }
 
