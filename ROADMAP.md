@@ -18,7 +18,7 @@ ordered so every release remains small, testable, and useful on its own.
 | Terminal dashboard | Manage inventory and scan releases interactively | Shipped in `v0.0.3` |
 | SBOM import | Build release inventory from CycloneDX JSON | Shipped in `v0.0.4` |
 | Local vulnerability data | Sync OSV data and scan from a local snapshot | Shipped in `v0.0.5` |
-| Finding lifecycle | Persist matches and track what changed | Next |
+| Finding lifecycle | Persist matches and track what changed | Shipped in `v0.0.6` |
 | Human assessment | Record impact decisions and evidence | Planned |
 | KEV enrichment | Prioritize known exploitation | Planned |
 | Offline feeds | Scan from validated, transferable feed bundles | Planned |
@@ -62,33 +62,37 @@ This first local matcher persists the authoritative result of OSV's exact
 package-version query. Transferable full-feed bundles and independent local
 range evaluation remain part of the offline-feed milestone.
 
-## First complete PSIRT workflow
+## Shipped: persistent finding lifecycle
+
+`v0.0.6` turns complete local scan results into durable workflow records:
+
+- Each local scan records its release, data source, snapshot time, and counts.
+- Matches are unique per release, component version, and vulnerability.
+- Repeated scans distinguish new, existing, reopened, and no-longer-matched
+  findings.
+- Findings that stop matching remain available as historical evidence.
+- `psirtmap findings` and the dashboard expose the active finding inventory.
+- Direct `scan --live` checks remain diagnostic and cannot alter history.
+
+## Next complete PSIRT workflow
 
 Development now proceeds in this order.
 
-### 1. Persistent findings
-
-- Normalize and store vulnerability records locally.
-- Record scan runs against specific product releases.
-- Distinguish new, unchanged, and no-longer-matched findings.
-- Preserve source records and matching evidence for auditability.
-- Add filtering and deterministic JSON export.
-
-### 2. Human assessment
+### 1. Human assessment
 
 - Support `investigating`, `affected`, `not-affected`, and `fixed` states.
 - Require a reason for final impact decisions.
 - Record reviewer, timestamp, evidence, and change history.
 - Preserve earlier decisions instead of overwriting them silently.
 
-### 3. CISA KEV enrichment
+### 2. CISA KEV enrichment
 
 - Download and normalize the official KEV catalog.
 - Mark findings with known exploitation.
 - Display source and feed freshness.
 - Treat KEV as prioritization context—not proof that a product is affected.
 
-### 4. Stable operator workflow
+### 3. Stable operator workflow
 
 - Expose import, findings, assessments, and KEV consistently in the dashboard
   and scriptable CLI.

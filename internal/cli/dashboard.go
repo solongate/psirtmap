@@ -31,6 +31,7 @@ const (
 	screenProducts
 	screenReleases
 	screenComponents
+	screenFindings
 	screenScanner
 	screenCount
 )
@@ -43,6 +44,7 @@ var dashboardScreens = []struct {
 	{label: "Products", hint: "Product families you ship"},
 	{label: "Releases", hint: "Released product versions"},
 	{label: "Components", hint: "Third-party software inventory"},
+	{label: "Findings", hint: "Durable potential-impact history"},
 	{label: "Scanner", hint: "Local OSV impact check"},
 }
 
@@ -50,6 +52,7 @@ type dashboardInventory struct {
 	products   []store.Product
 	releases   []store.Release
 	components []store.Component
+	findings   []store.Finding
 	sync       *store.VulnerabilitySync
 }
 
@@ -198,7 +201,13 @@ func (m *dashboardModel) loadInventory() tea.Cmd {
 		if err != nil {
 			return dashboardInventoryMsg{err: err}
 		}
-		inventory := dashboardInventory{products: products, releases: releases, components: components}
+		findings, err := m.database.ListFindings(m.ctx, store.FindingFilter{})
+		if err != nil {
+			return dashboardInventoryMsg{err: err}
+		}
+		inventory := dashboardInventory{
+			products: products, releases: releases, components: components, findings: findings,
+		}
 		latestSync, err := m.database.LatestVulnerabilitySync(m.ctx)
 		if err == nil {
 			inventory.sync = &latestSync
@@ -250,8 +259,11 @@ func (m *dashboardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.scan = &message.result
-		m.setStatus(fmt.Sprintf("Scan complete: %d potential findings", len(message.result.Findings)), false)
-		return m, nil
+		m.setStatus(fmt.Sprintf(
+			"Scan saved: %d potential findings (%d new, %d no longer matched)",
+			len(message.result.Findings), message.result.New, message.result.NoLongerMatched,
+		), false)
+		return m, m.loadInventory()
 	case dashboardSyncMsg:
 		m.syncing = false
 		if message.err != nil {
@@ -586,6 +598,9 @@ func (m *dashboardModel) scanRelease(release store.Release) tea.Cmd {
 				result.SynchronizedAt = synchronizedAt.Format(time.RFC3339)
 			}
 		}
+		if err == nil {
+			err = persistScanResult(m.ctx, m.database, &result)
+		}
 		return dashboardScanMsg{result: result, err: err}
 	}
 }
@@ -677,6 +692,8 @@ func (m *dashboardModel) currentListLength() int {
 		return len(m.data.releases)
 	case screenComponents:
 		return len(m.data.components)
+	case screenFindings:
+		return len(m.data.findings)
 	default:
 		return 0
 	}
@@ -712,6 +729,8 @@ func screenFromKey(key string) (dashboardScreen, bool) {
 	case "4":
 		return screenComponents, true
 	case "5":
+		return screenFindings, true
+	case "6":
 		return screenScanner, true
 	default:
 		return screenOverview, false
@@ -813,6 +832,8 @@ func (m *dashboardModel) renderMain(width, height int) string {
 			content = m.renderReleases(innerWidth, innerHeight)
 		case screenComponents:
 			content = m.renderComponents(innerWidth, innerHeight)
+		case screenFindings:
+			content = m.renderFindings(innerWidth, innerHeight)
 		case screenScanner:
 			content = m.renderScanner(innerWidth, innerHeight)
 		}
@@ -836,15 +857,17 @@ func panelStyle(width, height int, active bool) lipgloss.Style {
 func (m *dashboardModel) renderOverview(width, height int) string {
 	title := styleTitle.Render("Overview") + "  " + styleMuted.Render(dashboardScreens[screenOverview].hint)
 	counts := fmt.Sprintf(
-		"%s  %s  %s",
+		"%s  %s  %s  %s",
 		metric("PRODUCTS", len(m.data.products)),
 		metric("RELEASES", len(m.data.releases)),
 		metric("COMPONENTS", len(m.data.components)),
+		metric("FINDINGS", len(m.data.findings)),
 	)
 	lines := []string{title, "", counts, "", styleTitle.Render("Data sources")}
 	lines = append(lines,
 		statusLine("●", "Local inventory", "READY", true),
 		statusLine("●", "CycloneDX import", "READY", true),
+		statusLine("●", "Finding history", "READY", true),
 	)
 	if m.data.sync == nil {
 		lines = append(lines, statusLine("○", "Local OSV snapshot", "NOT SYNCED", false))
@@ -945,6 +968,30 @@ func (m *dashboardModel) renderComponents(width, height int) string {
 	return strings.Join(lines, "\n")
 }
 
+func (m *dashboardModel) renderFindings(width, height int) string {
+	lines := []string{
+		styleTitle.Render("Findings") + "  " + styleMuted.Render(fmt.Sprintf("%d active", len(m.data.findings))),
+		styleMuted.Render("Vulnerability        Component                    Shipped release"),
+	}
+	if len(m.data.findings) == 0 {
+		return strings.Join(append(
+			lines, "", "No active findings yet.",
+			styleMuted.Render("Run a local release scan to create durable findings."),
+		), "\n")
+	}
+	rows := visibleRange(len(m.data.findings), m.selected[screenFindings], max(1, height-4))
+	for index := rows.start; index < rows.end; index++ {
+		item := m.data.findings[index]
+		row := fmt.Sprintf("%-20s %-28s %s",
+			fitText(item.VulnerabilityID, 20),
+			fitText(item.Component+"@"+item.ComponentVersion, 28),
+			item.Product+"@"+item.Release,
+		)
+		lines = append(lines, selectableRow(fitText(row, width), index == m.selected[screenFindings]))
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (m *dashboardModel) renderScanner(width, height int) string {
 	lines := []string{
 		styleTitle.Render("Release scanner") + "  " + styleMuted.Render("local OSV package-version matching"),
@@ -978,6 +1025,8 @@ func (m *dashboardModel) renderScanner(width, height int) string {
 	lines = append(lines,
 		styleTitle.Render(fmt.Sprintf("Last result — %s@%s", m.scan.Product, m.scan.Release)),
 		fmt.Sprintf("%d components checked  •  %s potential findings", m.scan.Components, styleWarn.Render(fmt.Sprintf("%d", len(m.scan.Findings)))),
+		fmt.Sprintf("Saved changes: %d new  •  %d existing  •  %d reopened  •  %d no longer matched",
+			m.scan.New, m.scan.Existing, m.scan.Reopened, m.scan.NoLongerMatched),
 	)
 	if len(m.scan.Findings) == 0 {
 		lines = append(lines, styleGood.Render("No known OSV matches found."))
@@ -1043,7 +1092,7 @@ func (m *dashboardModel) renderHelp(width int) string {
 		helpRow("↑/↓ or j/k", "Move through sections or rows"),
 		helpRow("←/→ or h/l", "Focus navigation or content"),
 		helpRow("Tab", "Switch between navigation and content"),
-		helpRow("1–5", "Open a section directly"),
+		helpRow("1–6", "Open a section directly"),
 		helpRow("n", "Create an item for the current section"),
 		helpRow("i", "Import CycloneDX JSON from Releases"),
 		helpRow("s / Enter", "Scan the selected release"),

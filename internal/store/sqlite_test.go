@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/solongate/psirtmap/internal/osv"
 )
@@ -455,5 +456,217 @@ func TestOSVSnapshotLifecycleIsLocalAndAtomic(t *testing.T) {
 	}
 	if vulnerabilityRows != 0 {
 		t.Fatalf("stale vulnerability rows = %d, want 0", vulnerabilityRows)
+	}
+}
+
+func TestFindingReconciliationPreservesLifecycleHistory(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err := database.CreateProduct(ctx, "AG-200", ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, release := range []string{"2.2", "2.3"} {
+		if _, err := database.CreateRelease(ctx, "AG-200", release); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	match := FindingMatch{
+		Ecosystem: "Alpine", Component: "openssl", ComponentVersion: "3.0.8",
+		VulnerabilityID: "CVE-2026-12345", Aliases: []string{"GHSA-test", "GHSA-test"},
+		Summary: "Potential OpenSSL impact",
+	}
+	first, err := database.ReconcileFindings(
+		ctx, "ag-200", "2.2", []FindingMatch{match, match},
+		"local-osv-snapshot", time.Now(), 1,
+	)
+	if err != nil {
+		t.Fatalf("first ReconcileFindings() error = %v", err)
+	}
+	if first.Product != "AG-200" || first.Matched != 1 || first.New != 1 || first.Existing != 0 {
+		t.Fatalf("first reconciliation = %+v", first)
+	}
+	findings, err := database.ListFindings(ctx, FindingFilter{})
+	if err != nil || len(findings) != 1 {
+		t.Fatalf("ListFindings() = %+v, %v", findings, err)
+	}
+	if !findings[0].Active || findings[0].Status != "needs-review" || len(findings[0].Aliases) != 1 {
+		t.Fatalf("active finding = %+v", findings[0])
+	}
+	firstSeenAt := findings[0].FirstSeenAt
+
+	second, err := database.ReconcileFindings(
+		ctx, "AG-200", "2.2", []FindingMatch{match},
+		"local-osv-snapshot", time.Now(), 1,
+	)
+	if err != nil || second.Existing != 1 || second.New != 0 || second.Reopened != 0 {
+		t.Fatalf("second reconciliation = %+v, %v", second, err)
+	}
+
+	closed, err := database.ReconcileFindings(
+		ctx, "AG-200", "2.2", nil, "local-osv-snapshot", time.Now(), 1,
+	)
+	if err != nil || closed.NoLongerMatched != 1 || closed.Matched != 0 {
+		t.Fatalf("closed reconciliation = %+v, %v", closed, err)
+	}
+	active, err := database.ListFindings(ctx, FindingFilter{})
+	if err != nil || active == nil || len(active) != 0 {
+		t.Fatalf("active findings after close = %#v, %v", active, err)
+	}
+	all, err := database.ListFindings(ctx, FindingFilter{IncludeInactive: true})
+	if err != nil || len(all) != 1 || all[0].Active || all[0].Status != "no-longer-matched" || all[0].NoLongerMatchedAt == nil {
+		t.Fatalf("all findings after close = %+v, %v", all, err)
+	}
+
+	reopened, err := database.ReconcileFindings(
+		ctx, "AG-200", "2.2", []FindingMatch{match},
+		"local-osv-snapshot", time.Now(), 1,
+	)
+	if err != nil || reopened.Reopened != 1 || reopened.New != 0 {
+		t.Fatalf("reopened reconciliation = %+v, %v", reopened, err)
+	}
+	findings, err = database.ListFindings(ctx, FindingFilter{Product: "AG-200", Release: "2.2"})
+	if err != nil || len(findings) != 1 || !findings[0].FirstSeenAt.Equal(firstSeenAt) || findings[0].NoLongerMatchedAt != nil {
+		t.Fatalf("reopened finding = %+v, %v", findings, err)
+	}
+
+	otherRelease, err := database.ListFindings(ctx, FindingFilter{Product: "AG-200", Release: "2.3", IncludeInactive: true})
+	if err != nil || otherRelease == nil || len(otherRelease) != 0 {
+		t.Fatalf("other release findings = %#v, %v", otherRelease, err)
+	}
+	var scans int
+	if err := database.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM finding_scans").Scan(&scans); err != nil {
+		t.Fatal(err)
+	}
+	if scans != 4 {
+		t.Fatalf("finding scan audit rows = %d, want 4", scans)
+	}
+}
+
+func TestFindingReconciliationRejectsInvalidInputWithoutWriting(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err := database.CreateProduct(ctx, "gateway", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateRelease(ctx, "gateway", "1.0"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = database.ReconcileFindings(ctx, "gateway", "1.0", []FindingMatch{{
+		Ecosystem: "npm", Component: "pkg", ComponentVersion: "1.0",
+	}}, "local-osv-snapshot", time.Time{}, 1)
+	if err == nil || !strings.Contains(err.Error(), "vulnerability ID") {
+		t.Fatalf("invalid reconciliation error = %v", err)
+	}
+	var scans, findings int
+	if err := database.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM finding_scans").Scan(&scans); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM findings").Scan(&findings); err != nil {
+		t.Fatal(err)
+	}
+	if scans != 0 || findings != 0 {
+		t.Fatalf("invalid reconciliation wrote scans=%d findings=%d", scans, findings)
+	}
+
+	if _, err := database.db.ExecContext(ctx, `CREATE TRIGGER reject_finding_insert
+		BEFORE INSERT ON findings BEGIN SELECT RAISE(ABORT, 'forced finding failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	_, err = database.ReconcileFindings(ctx, "gateway", "1.0", []FindingMatch{{
+		Ecosystem: "npm", Component: "pkg", ComponentVersion: "1.0",
+		VulnerabilityID: "CVE-2026-ROLLBACK",
+	}}, "local-osv-snapshot", time.Time{}, 1)
+	if err == nil || !strings.Contains(err.Error(), "forced finding failure") {
+		t.Fatalf("forced transaction error = %v", err)
+	}
+	if err := database.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM finding_scans").Scan(&scans); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM findings").Scan(&findings); err != nil {
+		t.Fatal(err)
+	}
+	if scans != 0 || findings != 0 {
+		t.Fatalf("failed transaction wrote scans=%d findings=%d", scans, findings)
+	}
+}
+
+func TestSchemaVersionThreeMigratesWithoutLosingLocalSnapshot(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "v3.db")
+	database, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateProduct(ctx, "AG-200", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateRelease(ctx, "AG-200", "2.2"); err != nil {
+		t.Fatal(err)
+	}
+	pkg := PackageVersion{Ecosystem: "Alpine", Name: "openssl", Version: "3.0.8"}
+	if _, err := database.CreateComponent(ctx, "AG-200", "2.2", pkg.Ecosystem, pkg.Name, pkg.Version); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.SaveOSVSnapshot(ctx, []PackageSnapshot{{
+		Package: pkg, Vulnerabilities: []osv.Vulnerability{{ID: "CVE-2026-MIGRATION"}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		"DROP TABLE findings",
+		"DROP TABLE finding_scans",
+		"PRAGMA user_version = 3",
+	} {
+		if _, err := raw.ExecContext(ctx, statement); err != nil {
+			raw.Close()
+			t.Fatalf("prepare v3 database: %v", err)
+		}
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	database, err = Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open(v3) error = %v", err)
+	}
+	defer database.Close()
+	vulnerabilities, _, err := database.LookupOSVSnapshot(ctx, pkg)
+	if err != nil || len(vulnerabilities) != 1 || vulnerabilities[0].ID != "CVE-2026-MIGRATION" {
+		t.Fatalf("migrated snapshot = %+v, %v", vulnerabilities, err)
+	}
+	findings, err := database.ListFindings(ctx, FindingFilter{})
+	if err != nil || findings == nil || len(findings) != 0 {
+		t.Fatalf("migrated findings = %#v, %v", findings, err)
+	}
+	var version int
+	if err := database.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != schemaVersion {
+		t.Fatalf("schema version = %d, want %d", version, schemaVersion)
 	}
 }

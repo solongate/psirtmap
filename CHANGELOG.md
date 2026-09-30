@@ -6,6 +6,28 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.6] - 2026-09-30
+
+### Added
+
+- Durable finding records created by trusted local-snapshot release scans.
+- Finding lifecycle reconciliation for new, existing, reopened, and
+  no-longer-matched records without deleting historical evidence.
+- `psirtmap findings [product@release]` with text, JSON, active-only, and
+  `--all` history views.
+- A Findings section and persistent lifecycle counters in the terminal
+  dashboard.
+- Scan audit records with release, data source, snapshot time, and lifecycle
+  counts.
+
+### Changed
+
+- Normal local scans now save findings atomically after every complete match.
+- `scan --live` is explicitly diagnostic and never changes finding history.
+- Database schema migrated to version 4 without changing existing inventory or
+  local OSV snapshots.
+- Version advanced to `0.0.6`.
+
 ## [0.0.5] - 2026-09-30
 
 ### Added
@@ -99,7 +121,8 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Human-readable and JSON output.
 - Automated tests, cross-platform release builds, and Apache-2.0 licensing.
 
-[Unreleased]: https://github.com/solongate/psirtmap/compare/v0.0.5...HEAD
+[Unreleased]: https://github.com/solongate/psirtmap/compare/v0.0.6...HEAD
+[0.0.6]: https://github.com/solongate/psirtmap/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/solongate/psirtmap/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/solongate/psirtmap/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/solongate/psirtmap/compare/v0.0.2...v0.0.3
