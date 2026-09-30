@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textinput"
@@ -42,13 +43,14 @@ var dashboardScreens = []struct {
 	{label: "Products", hint: "Product families you ship"},
 	{label: "Releases", hint: "Released product versions"},
 	{label: "Components", hint: "Third-party software inventory"},
-	{label: "Scanner", hint: "Live OSV impact check"},
+	{label: "Scanner", hint: "Local OSV impact check"},
 }
 
 type dashboardInventory struct {
 	products   []store.Product
 	releases   []store.Release
 	components []store.Component
+	sync       *store.VulnerabilitySync
 }
 
 type dashboardInventoryMsg struct {
@@ -63,6 +65,11 @@ type dashboardSavedMsg struct {
 
 type dashboardScanMsg struct {
 	result scanResult
+	err    error
+}
+
+type dashboardSyncMsg struct {
+	result store.VulnerabilitySync
 	err    error
 }
 
@@ -107,6 +114,7 @@ type dashboardModel struct {
 	status    string
 	statusErr bool
 	scanning  bool
+	syncing   bool
 	scan      *scanResult
 	spinner   spinner.Model
 }
@@ -190,9 +198,14 @@ func (m *dashboardModel) loadInventory() tea.Cmd {
 		if err != nil {
 			return dashboardInventoryMsg{err: err}
 		}
-		return dashboardInventoryMsg{inventory: dashboardInventory{
-			products: products, releases: releases, components: components,
-		}}
+		inventory := dashboardInventory{products: products, releases: releases, components: components}
+		latestSync, err := m.database.LatestVulnerabilitySync(m.ctx)
+		if err == nil {
+			inventory.sync = &latestSync
+		} else if !errors.Is(err, store.ErrSnapshotNotFound) {
+			return dashboardInventoryMsg{err: err}
+		}
+		return dashboardInventoryMsg{inventory: inventory}
 	}
 }
 
@@ -239,10 +252,21 @@ func (m *dashboardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.scan = &message.result
 		m.setStatus(fmt.Sprintf("Scan complete: %d potential findings", len(message.result.Findings)), false)
 		return m, nil
+	case dashboardSyncMsg:
+		m.syncing = false
+		if message.err != nil {
+			m.setStatus(message.err.Error(), true)
+			return m, nil
+		}
+		m.setStatus(fmt.Sprintf(
+			"OSV snapshot updated: %d packages, %d vulnerabilities",
+			message.result.Packages, message.result.Vulnerabilities,
+		), false)
+		return m, m.loadInventory()
 	case spinner.TickMsg:
 		var command tea.Cmd
 		m.spinner, command = m.spinner.Update(message)
-		if m.loading || m.scanning {
+		if m.loading || m.scanning || m.syncing {
 			return m, command
 		}
 		return m, nil
@@ -285,6 +309,8 @@ func (m *dashboardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			if m.screen == screenScanner {
 				return m.startScan()
 			}
+		case "u":
+			return m.startSync()
 		}
 
 		if numericScreen, ok := screenFromKey(key); ok {
@@ -523,15 +549,23 @@ func (m *dashboardModel) startScan() (tea.Model, tea.Cmd) {
 	if m.scanning {
 		return m, nil
 	}
+	if m.syncing {
+		m.setStatus("Wait for the OSV snapshot update to finish", false)
+		return m, nil
+	}
 	if len(m.data.releases) == 0 {
 		m.setStatus("No releases to scan", true)
+		return m, nil
+	}
+	if m.data.sync == nil {
+		m.setStatus("No local OSV snapshot; press u to update it first", true)
 		return m, nil
 	}
 	selected := min(m.selected[screenScanner], len(m.data.releases)-1)
 	release := m.data.releases[selected]
 	m.scanning = true
 	m.scan = nil
-	m.setStatus("Querying OSV for "+release.Product+"@"+release.Version+"...", false)
+	m.setStatus("Scanning "+release.Product+"@"+release.Version+" from the local OSV snapshot...", false)
 	return m, tea.Batch(m.scanRelease(release), m.spinner.Tick)
 }
 
@@ -543,12 +577,52 @@ func (m *dashboardModel) scanRelease(release store.Release) tea.Cmd {
 		}
 		result := scanResult{
 			Product: release.Product, Release: release.Version,
-			Components: len(components), Findings: []finding{},
+			Components: len(components), DataSource: "local-osv-snapshot", Findings: []finding{},
 		}
 		if len(components) > 0 {
-			result.Findings, err = scanComponents(m.ctx, components, m.querier)
+			var synchronizedAt time.Time
+			result.Findings, synchronizedAt, err = scanComponentsLocal(m.ctx, components, m.database)
+			if !synchronizedAt.IsZero() {
+				result.SynchronizedAt = synchronizedAt.Format(time.RFC3339)
+			}
 		}
 		return dashboardScanMsg{result: result, err: err}
+	}
+}
+
+func (m *dashboardModel) startSync() (tea.Model, tea.Cmd) {
+	if m.syncing {
+		return m, nil
+	}
+	if m.scanning {
+		m.setStatus("Wait for the release scan to finish", false)
+		return m, nil
+	}
+	if len(m.data.components) == 0 {
+		m.setStatus("Import an SBOM or add a component before updating OSV data", true)
+		return m, nil
+	}
+	if m.querier == nil {
+		m.setStatus("Vulnerability service is unavailable", true)
+		return m, nil
+	}
+	m.syncing = true
+	m.setStatus("Updating the local OSV snapshot. This uses the internet...", false)
+	return m, tea.Batch(m.syncSnapshot(), m.spinner.Tick)
+}
+
+func (m *dashboardModel) syncSnapshot() tea.Cmd {
+	return func() tea.Msg {
+		packages, err := m.database.ListPackageVersions(m.ctx)
+		if err != nil {
+			return dashboardSyncMsg{err: err}
+		}
+		snapshots, err := queryPackageSnapshots(m.ctx, packages, m.querier)
+		if err != nil {
+			return dashboardSyncMsg{err: err}
+		}
+		result, err := m.database.SaveOSVSnapshot(m.ctx, snapshots)
+		return dashboardSyncMsg{result: result, err: err}
 	}
 }
 
@@ -771,8 +845,12 @@ func (m *dashboardModel) renderOverview(width, height int) string {
 	lines = append(lines,
 		statusLine("●", "Local inventory", "READY", true),
 		statusLine("●", "CycloneDX import", "READY", true),
-		statusLine("●", "OSV live queries", "READY", true),
 	)
+	if m.data.sync == nil {
+		lines = append(lines, statusLine("○", "Local OSV snapshot", "NOT SYNCED", false))
+	} else {
+		lines = append(lines, statusLine("●", "Local OSV snapshot", m.data.sync.SynchronizedAt.Format("2006-01-02 15:04Z"), true))
+	}
 	if height >= 12 {
 		lines = append(lines,
 			statusLine("○", "CISA KEV enrichment", "PLANNED", false),
@@ -785,7 +863,7 @@ func (m *dashboardModel) renderOverview(width, height int) string {
 			styleTitle.Render("Quick start"),
 			"  1. Press n to create a product",
 			"  2. Open Releases and press i to import its CycloneDX SBOM",
-			"  3. Review the imported components, then scan the release",
+			"  3. Press u to update local OSV data, then scan the release",
 		)
 	}
 	if len(m.data.releases) > 0 && height > 17 {
@@ -869,7 +947,7 @@ func (m *dashboardModel) renderComponents(width, height int) string {
 
 func (m *dashboardModel) renderScanner(width, height int) string {
 	lines := []string{
-		styleTitle.Render("Release scanner") + "  " + styleMuted.Render("live OSV package-version matching"),
+		styleTitle.Render("Release scanner") + "  " + styleMuted.Render("local OSV package-version matching"),
 		styleWarn.Render("Matches are potentially affected and always require human review."),
 		"",
 	}
@@ -886,11 +964,15 @@ func (m *dashboardModel) renderScanner(width, height int) string {
 	}
 	lines = append(lines, "")
 	if m.scanning {
-		lines = append(lines, m.spinner.View()+" Querying OSV. This uses the internet...")
+		lines = append(lines, m.spinner.View()+" Matching against the local OSV snapshot...")
 		return strings.Join(lines, "\n")
 	}
 	if m.scan == nil {
-		lines = append(lines, styleMuted.Render("Press s or Enter to scan the selected release."))
+		if m.data.sync == nil {
+			lines = append(lines, styleWarn.Render("No local OSV snapshot. Press u to update it first."))
+		} else {
+			lines = append(lines, styleMuted.Render("Press s or Enter to scan the selected release."))
+		}
 		return strings.Join(lines, "\n")
 	}
 	lines = append(lines,
@@ -965,6 +1047,7 @@ func (m *dashboardModel) renderHelp(width int) string {
 		helpRow("n", "Create an item for the current section"),
 		helpRow("i", "Import CycloneDX JSON from Releases"),
 		helpRow("s / Enter", "Scan the selected release"),
+		helpRow("u", "Update the local OSV snapshot (uses internet)"),
 		helpRow("r", "Refresh local inventory"),
 		helpRow("? / Esc", "Close this help"),
 		helpRow("q", "Quit safely"),
@@ -986,6 +1069,7 @@ func (m *dashboardModel) renderFooter() string {
 		styleKey.Render("n") + " new",
 		styleKey.Render("i") + " import",
 		styleKey.Render("s") + " scan",
+		styleKey.Render("u") + " sync",
 		styleKey.Render("?") + " help",
 		styleKey.Render("q") + " quit",
 	}

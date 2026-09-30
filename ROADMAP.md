@@ -17,8 +17,8 @@ ordered so every release remains small, testable, and useful on its own.
 | Product inventory | Store products, releases, and components locally | Shipped in `v0.0.2` |
 | Terminal dashboard | Manage inventory and scan releases interactively | Shipped in `v0.0.3` |
 | SBOM import | Build release inventory from CycloneDX JSON | Shipped in `v0.0.4` |
-| Local vulnerability data | Normalize OSV data and match from local records | Next |
-| Finding lifecycle | Persist matches and track what changed | Planned |
+| Local vulnerability data | Sync OSV data and scan from a local snapshot | Shipped in `v0.0.5` |
+| Finding lifecycle | Persist matches and track what changed | Next |
 | Human assessment | Record impact decisions and evidence | Planned |
 | KEV enrichment | Prioritize known exploitation | Planned |
 | Offline feeds | Scan from validated, transferable feed bundles | Planned |
@@ -44,22 +44,27 @@ The implementation:
 - Reports imported, already-present, duplicated, and skipped records clearly.
 - Keeps manual component entry for demos and corrections.
 
-## Next: local vulnerability data and matcher
+## Shipped: local vulnerability data and matcher
 
-The next milestone moves vulnerability intelligence behind a stable local data
-model instead of treating live API responses as the product's long-term
-matching architecture:
+`v0.0.5` moved vulnerability intelligence behind a stable local data model
+instead of treating live API responses as the product's long-term matching
+architecture:
 
-- Normalize OSV advisories, aliases, affected packages, and version ranges.
-- Record feed source, retrieval time, and freshness.
-- Match imported component identities against the same local data model that
-  future offline bundles will populate.
-- Keep the existing live query workflow available until the local matcher is
-  validated against representative fixtures.
+- `psirtmap sync` queries every distinct package version in the inventory.
+- OSV advisories, aliases, severity, affected packages, and ranges are stored
+  locally with source and synchronization time.
+- The complete snapshot is committed atomically only after every query succeeds.
+- Normal release scans use exact matches from the local snapshot without an
+  internet request.
+- `scan --live` remains available as an explicit diagnostic path.
+
+This first local matcher persists the authoritative result of OSV's exact
+package-version query. Transferable full-feed bundles and independent local
+range evaluation remain part of the offline-feed milestone.
 
 ## First complete PSIRT workflow
 
-After the local vulnerability layer, development proceeds in this order.
+Development now proceeds in this order.
 
 ### 1. Persistent findings
 
@@ -92,9 +97,9 @@ After the local vulnerability layer, development proceeds in this order.
 
 ## Offline and air-gapped operation
 
-PSIRTMap is local-first today; its OSV scans still require internet access.
-Air-gapped operation will ship only after the online matching workflow is
-correct and auditable.
+PSIRTMap is local-first today: after an internet-connected `sync`, normal scans
+run from SQLite without network access. Moving fresh data into a machine that
+never connects to the internet is not shipped yet.
 
 The planned flow is:
 

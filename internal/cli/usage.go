@@ -19,7 +19,8 @@ Inventory commands:
   product     Add and list products
   release     Add, import, and list product releases
   component   Add and list release components
-  scan        Match a release's components against OSV
+  sync        Update the local OSV snapshot for inventory packages
+  scan        Match a release against the local OSV snapshot
 
 Other commands:
   check       Query OSV for one package version
@@ -90,12 +91,27 @@ Examples:
 }
 
 func printScanUsage(writer io.Writer) {
-	fmt.Fprintln(writer, `Match every component in a product release against OSV.
+	fmt.Fprintln(writer, `Match every component in a product release against OSV data.
 
 Usage:
-  psirtmap scan <product>@<release> [--json]
+
+  psirtmap scan <product>@<release> [--live] [--json]
+
+The default scan uses the local snapshot created by "psirtmap sync" and does
+not require internet access. Use --live to query OSV directly without changing
+the saved snapshot.
 
 A match means potentially affected and requires human review.`)
+}
+
+func printSyncUsage(writer io.Writer) {
+	fmt.Fprintln(writer, `Update the local OSV snapshot for every distinct package version in the inventory.
+
+Usage:
+  psirtmap [--database <path>] sync [--json]
+
+Sync requires internet access. All OSV queries must succeed before the new
+snapshot is committed, so a failed update leaves the previous snapshot intact.`)
 }
 
 func printDashboardUsage(writer io.Writer) {

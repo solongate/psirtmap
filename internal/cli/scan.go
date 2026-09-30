@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"sync"
 	"text/tabwriter"
+	"time"
 
 	"github.com/solongate/psirtmap/internal/osv"
 	"github.com/solongate/psirtmap/internal/store"
@@ -26,10 +28,19 @@ type finding struct {
 }
 
 type scanResult struct {
-	Product    string    `json:"product"`
-	Release    string    `json:"release"`
-	Components int       `json:"components"`
-	Findings   []finding `json:"findings"`
+	Product        string    `json:"product"`
+	Release        string    `json:"release"`
+	Components     int       `json:"components"`
+	DataSource     string    `json:"data_source"`
+	SynchronizedAt string    `json:"synchronized_at,omitempty"`
+	Findings       []finding `json:"findings"`
+}
+
+type scanOptions struct {
+	reference  string
+	jsonOutput bool
+	live       bool
+	help       bool
 }
 
 type scanJob struct {
@@ -52,22 +63,19 @@ func runScan(
 	database *store.DB,
 	querier VulnerabilityQuerier,
 ) int {
-	positional, jsonOutput, help, err := parseJSONPositionals(args)
+	options, err := parseScanOptions(args)
 	if err != nil {
 		return usageError(stderr, err, printScanUsage)
 	}
-	if help {
+	if options.help {
 		printScanUsage(stdout)
 		return 0
 	}
-	if len(positional) != 1 {
-		return usageError(stderr, errors.New("scan requires one product@release reference"), printScanUsage)
-	}
-	if querier == nil {
+	if options.live && querier == nil {
 		return commandError(stderr, errors.New("vulnerability service is unavailable"))
 	}
 
-	productName, releaseVersion, err := splitReference(positional[0], "release")
+	productName, releaseVersion, err := splitReference(options.reference, "release")
 	if err != nil {
 		return usageError(stderr, err, printScanUsage)
 	}
@@ -81,25 +89,65 @@ func runScan(
 	}
 
 	result := scanResult{
-		Product:    release.Product,
-		Release:    release.Version,
-		Components: len(components),
-		Findings:   []finding{},
+		Product: release.Product, Release: release.Version,
+		Components: len(components), Findings: []finding{},
 	}
 	if len(components) > 0 {
-		result.Findings, err = scanComponents(ctx, components, querier)
-		if err != nil {
-			return commandError(stderr, err)
+		if options.live {
+			result.DataSource = "osv-live"
+			result.Findings, err = scanComponentsLive(ctx, components, querier)
+		} else {
+			result.DataSource = "local-osv-snapshot"
+			var synchronizedAt time.Time
+			result.Findings, synchronizedAt, err = scanComponentsLocal(ctx, components, database)
+			if !synchronizedAt.IsZero() {
+				result.SynchronizedAt = synchronizedAt.Format(time.RFC3339)
+			}
 		}
+	} else if options.live {
+		result.DataSource = "osv-live"
+	} else {
+		result.DataSource = "local-osv-snapshot"
+	}
+	if err != nil {
+		return commandError(stderr, err)
 	}
 
-	if jsonOutput {
+	if options.jsonOutput {
 		return printJSON(stdout, stderr, result)
 	}
 	return printScanText(stdout, stderr, result)
 }
 
-func scanComponents(
+func parseScanOptions(args []string) (scanOptions, error) {
+	var options scanOptions
+	var positional []string
+	for _, argument := range args {
+		switch argument {
+		case "--help", "-h":
+			options.help = true
+		case "--json":
+			options.jsonOutput = true
+		case "--live":
+			options.live = true
+		default:
+			if strings.HasPrefix(argument, "-") {
+				return options, fmt.Errorf("unknown option %q", argument)
+			}
+			positional = append(positional, argument)
+		}
+	}
+	if options.help {
+		return options, nil
+	}
+	if len(positional) != 1 {
+		return options, errors.New("scan requires one product@release reference")
+	}
+	options.reference = positional[0]
+	return options, nil
+}
+
+func scanComponentsLive(
 	ctx context.Context,
 	components []store.Component,
 	querier VulnerabilityQuerier,
@@ -195,9 +243,73 @@ func scanComponents(
 	return findings, nil
 }
 
+func scanComponentsLocal(
+	ctx context.Context,
+	components []store.Component,
+	database *store.DB,
+) ([]finding, time.Time, error) {
+	findings := make([]finding, 0)
+	var synchronizedAt time.Time
+	for _, component := range components {
+		vulnerabilities, packageSyncedAt, err := database.LookupOSVSnapshot(ctx, store.PackageVersion{
+			Ecosystem: component.Ecosystem,
+			Name:      component.Name,
+			Version:   component.Version,
+		})
+		if err != nil {
+			if errors.Is(err, store.ErrSnapshotNotFound) {
+				return nil, time.Time{}, fmt.Errorf(
+					"no local OSV data for %s:%s@%s; run \"psirtmap sync\" or use \"psirtmap scan --live %s@%s\"",
+					component.Ecosystem, component.Name, component.Version,
+					component.Product, component.ReleaseVersion,
+				)
+			}
+			return nil, time.Time{}, err
+		}
+		if synchronizedAt.IsZero() || packageSyncedAt.Before(synchronizedAt) {
+			synchronizedAt = packageSyncedAt
+		}
+		for _, vulnerability := range vulnerabilities {
+			findings = append(findings, finding{
+				ID: vulnerability.ID, Aliases: vulnerability.Aliases,
+				Summary: vulnerability.Summary, Ecosystem: component.Ecosystem,
+				Component: component.Name, ComponentVersion: component.Version,
+				Status: "needs-review",
+			})
+		}
+	}
+	sortFindings(findings)
+	return findings, synchronizedAt, nil
+}
+
+func sortFindings(findings []finding) {
+	sort.Slice(findings, func(i, j int) bool {
+		if findings[i].ID != findings[j].ID {
+			return findings[i].ID < findings[j].ID
+		}
+		if findings[i].Ecosystem != findings[j].Ecosystem {
+			return findings[i].Ecosystem < findings[j].Ecosystem
+		}
+		if findings[i].Component != findings[j].Component {
+			return findings[i].Component < findings[j].Component
+		}
+		return findings[i].ComponentVersion < findings[j].ComponentVersion
+	})
+}
+
 func printScanText(stdout io.Writer, stderr io.Writer, result scanResult) int {
 	fmt.Fprintln(stdout, "PRODUCT RELEASE")
 	fmt.Fprintf(stdout, "%s %s\n\n", result.Product, result.Release)
+	fmt.Fprintln(stdout, "DATA SOURCE")
+	if result.DataSource == "osv-live" {
+		fmt.Fprintln(stdout, "OSV live query")
+		fmt.Fprintln(stdout)
+	} else if result.SynchronizedAt != "" {
+		fmt.Fprintf(stdout, "Local OSV snapshot (%s)\n\n", result.SynchronizedAt)
+	} else {
+		fmt.Fprintln(stdout, "Local OSV snapshot")
+		fmt.Fprintln(stdout)
+	}
 	fmt.Fprintf(stdout, "COMPONENTS\n%d\n\n", result.Components)
 	fmt.Fprintf(stdout, "POTENTIAL FINDINGS\n%d\n", len(result.Findings))
 

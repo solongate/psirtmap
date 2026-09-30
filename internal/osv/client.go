@@ -30,10 +30,12 @@ type Client struct {
 type Package struct {
 	Name      string `json:"name"`
 	Ecosystem string `json:"ecosystem"`
+	PURL      string `json:"purl,omitempty"`
 }
 
-// Vulnerability is the subset of an OSV record needed by the first PSIRTMap
-// command. More fields can be added as the product model grows.
+// Vulnerability contains the OSV fields PSIRTMap persists locally. Affected
+// package and range data is retained even when the current match was obtained
+// from OSV's exact package-version query endpoint.
 type Vulnerability struct {
 	ID        string     `json:"id"`
 	Summary   string     `json:"summary,omitempty"`
@@ -41,13 +43,41 @@ type Vulnerability struct {
 	Aliases   []string   `json:"aliases,omitempty"`
 	Published string     `json:"published,omitempty"`
 	Modified  string     `json:"modified,omitempty"`
+	Withdrawn string     `json:"withdrawn,omitempty"`
 	Severity  []Severity `json:"severity,omitempty"`
+	Affected  []Affected `json:"affected,omitempty"`
 }
 
 // Severity contains an OSV severity type and its score or vector.
 type Severity struct {
 	Type  string `json:"type"`
 	Score string `json:"score"`
+}
+
+// Affected describes a package and the versions or ranges affected by an OSV
+// record. The ecosystem-specific fields are kept as JSON because their shape
+// is deliberately source-defined.
+type Affected struct {
+	Package           Package         `json:"package"`
+	Ranges            []Range         `json:"ranges,omitempty"`
+	Versions          []string        `json:"versions,omitempty"`
+	EcosystemSpecific json.RawMessage `json:"ecosystem_specific,omitempty"`
+	DatabaseSpecific  json.RawMessage `json:"database_specific,omitempty"`
+}
+
+// Range is one OSV version range such as SEMVER, ECOSYSTEM, or GIT.
+type Range struct {
+	Type   string       `json:"type"`
+	Repo   string       `json:"repo,omitempty"`
+	Events []RangeEvent `json:"events"`
+}
+
+// RangeEvent is one boundary in an OSV affected range.
+type RangeEvent struct {
+	Introduced   string `json:"introduced,omitempty"`
+	Fixed        string `json:"fixed,omitempty"`
+	LastAffected string `json:"last_affected,omitempty"`
+	Limit        string `json:"limit,omitempty"`
 }
 
 type queryRequest struct {
@@ -210,6 +240,7 @@ func canonicalizeVulnerabilities(records []Vulnerability) []Vulnerability {
 func mergeVulnerabilityGroup(records []Vulnerability) Vulnerability {
 	identifiers := make(map[string]struct{})
 	severitySet := make(map[Severity]struct{})
+	affectedSet := make(map[string]Affected)
 	var merged Vulnerability
 	for _, record := range records {
 		if record.ID != "" {
@@ -228,8 +259,17 @@ func mergeVulnerabilityGroup(records []Vulnerability) Vulnerability {
 		if record.Modified > merged.Modified {
 			merged.Modified = record.Modified
 		}
+		if merged.Withdrawn == "" || (record.Withdrawn != "" && record.Withdrawn < merged.Withdrawn) {
+			merged.Withdrawn = record.Withdrawn
+		}
 		for _, severity := range record.Severity {
 			severitySet[severity] = struct{}{}
+		}
+		for _, affected := range record.Affected {
+			encoded, err := json.Marshal(affected)
+			if err == nil {
+				affectedSet[string(encoded)] = affected
+			}
 		}
 	}
 
@@ -263,6 +303,17 @@ func mergeVulnerabilityGroup(records []Vulnerability) Vulnerability {
 	})
 	if len(merged.Severity) == 0 {
 		merged.Severity = nil
+	}
+	if len(affectedSet) > 0 {
+		keys := make([]string, 0, len(affectedSet))
+		for key := range affectedSet {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		merged.Affected = make([]Affected, 0, len(keys))
+		for _, key := range keys {
+			merged.Affected = append(merged.Affected, affectedSet[key])
+		}
 	}
 	return merged
 }
