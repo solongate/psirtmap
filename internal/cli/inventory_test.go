@@ -355,6 +355,96 @@ func TestScanRequiresLocalSnapshotUnlessLive(t *testing.T) {
 	}
 }
 
+func TestLocalScanPersistsFindingLifecycleAndLiveScanDoesNot(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "inventory.db")
+	querier := &inventoryQuerier{results: map[string]packageResult{
+		"npm:pkg@1.0": {vulnerabilities: []osv.Vulnerability{{
+			ID: "CVE-2026-PERSISTED", Aliases: []string{"GHSA-persisted"}, Summary: "stored match",
+		}}},
+	}}
+	for _, arguments := range [][]string{
+		{"product", "add", "gateway"},
+		{"release", "add", "gateway", "1.0"},
+		{"component", "add", "gateway@1.0", "pkg@1.0", "-e", "npm"},
+		{"sync"},
+	} {
+		exitCode, _, stderr := runWithDatabase(t, path, querier, arguments...)
+		requireSuccess(t, exitCode, stderr)
+	}
+
+	exitCode, stdout, stderr := runWithDatabase(t, path, querier, "scan", "gateway@1.0")
+	requireSuccess(t, exitCode, stderr)
+	if !strings.Contains(stdout, "New 1  Existing 0  Reopened 0  No longer matched 0") {
+		t.Fatalf("first scan stdout = %q", stdout)
+	}
+	exitCode, stdout, stderr = runWithDatabase(t, path, querier, "scan", "gateway@1.0")
+	requireSuccess(t, exitCode, stderr)
+	if !strings.Contains(stdout, "New 0  Existing 1  Reopened 0  No longer matched 0") {
+		t.Fatalf("second scan stdout = %q", stdout)
+	}
+	exitCode, stdout, stderr = runWithDatabase(t, path, querier, "findings", "gateway@1.0", "--json")
+	requireSuccess(t, exitCode, stderr)
+	var active []struct {
+		ID     string `json:"id"`
+		Status string `json:"status"`
+		Active bool   `json:"active"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &active); err != nil {
+		t.Fatalf("decode active findings %q: %v", stdout, err)
+	}
+	if len(active) != 1 || active[0].ID != "CVE-2026-PERSISTED" || active[0].Status != "needs-review" || !active[0].Active {
+		t.Fatalf("active findings = %+v", active)
+	}
+
+	querier.mu.Lock()
+	querier.results["npm:pkg@1.0"] = packageResult{vulnerabilities: []osv.Vulnerability{}}
+	querier.mu.Unlock()
+	for _, arguments := range [][]string{{"sync"}, {"scan", "gateway@1.0"}} {
+		exitCode, stdout, stderr = runWithDatabase(t, path, querier, arguments...)
+		requireSuccess(t, exitCode, stderr)
+	}
+	if !strings.Contains(stdout, "No longer matched 1") || !strings.Contains(stdout, "No known vulnerabilities found") {
+		t.Fatalf("closing scan stdout = %q", stdout)
+	}
+	exitCode, stdout, stderr = runWithDatabase(t, path, querier, "findings")
+	requireSuccess(t, exitCode, stderr)
+	if !strings.Contains(stdout, "No active findings found") {
+		t.Fatalf("active findings stdout = %q", stdout)
+	}
+	exitCode, stdout, stderr = runWithDatabase(t, path, querier, "findings", "--all")
+	requireSuccess(t, exitCode, stderr)
+	if !strings.Contains(stdout, "CVE-2026-PERSISTED") || !strings.Contains(stdout, "no-longer-matched") {
+		t.Fatalf("historical findings stdout = %q", stdout)
+	}
+
+	querier.mu.Lock()
+	querier.results["npm:pkg@1.0"] = packageResult{vulnerabilities: []osv.Vulnerability{{ID: "CVE-2026-PERSISTED"}}}
+	querier.mu.Unlock()
+	for _, arguments := range [][]string{{"sync"}, {"scan", "gateway@1.0"}} {
+		exitCode, stdout, stderr = runWithDatabase(t, path, querier, arguments...)
+		requireSuccess(t, exitCode, stderr)
+	}
+	if !strings.Contains(stdout, "New 0  Existing 0  Reopened 1  No longer matched 0") {
+		t.Fatalf("reopened scan stdout = %q", stdout)
+	}
+
+	querier.mu.Lock()
+	querier.results["npm:pkg@1.0"] = packageResult{vulnerabilities: []osv.Vulnerability{{ID: "CVE-2026-LIVE-ONLY"}}}
+	querier.mu.Unlock()
+	exitCode, stdout, stderr = runWithDatabase(t, path, querier, "scan", "gateway@1.0", "--live")
+	requireSuccess(t, exitCode, stderr)
+	if !strings.Contains(stdout, "Live results are diagnostic and were not saved") {
+		t.Fatalf("live scan stdout = %q", stdout)
+	}
+	exitCode, stdout, stderr = runWithDatabase(t, path, querier, "findings", "--all", "--json")
+	requireSuccess(t, exitCode, stderr)
+	if strings.Contains(stdout, "CVE-2026-LIVE-ONLY") || !strings.Contains(stdout, "CVE-2026-PERSISTED") {
+		t.Fatalf("findings after live scan = %q", stdout)
+	}
+}
+
 func TestGlobalDatabaseOptionValidation(t *testing.T) {
 	t.Parallel()
 
@@ -375,7 +465,7 @@ func TestGlobalDatabaseOptionValidation(t *testing.T) {
 func TestInventoryHelpDoesNotCreateDatabase(t *testing.T) {
 	t.Parallel()
 
-	for _, command := range []string{"init", "product", "release", "component", "sync", "scan", "dashboard", "ui"} {
+	for _, command := range []string{"init", "product", "release", "component", "sync", "scan", "findings", "dashboard", "ui"} {
 		command := command
 		t.Run(command, func(t *testing.T) {
 			t.Parallel()
@@ -403,7 +493,7 @@ func TestRootCommandsAndUsageErrors(t *testing.T) {
 		useStderr  bool
 	}{
 		{name: "root help", args: []string{"--help"}, wantCode: 0, wantOutput: "Inventory commands:"},
-		{name: "version", args: []string{"version"}, wantCode: 0, wantOutput: "0.0.5"},
+		{name: "version", args: []string{"version"}, wantCode: 0, wantOutput: "0.0.6"},
 		{name: "unknown", args: []string{"wat"}, wantCode: 2, wantOutput: "unknown command", useStderr: true},
 		{name: "missing database value", args: []string{"--database"}, wantCode: 2, wantOutput: "requires a value", useStderr: true},
 	}

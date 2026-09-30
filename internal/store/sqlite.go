@@ -19,7 +19,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 3
+const schemaVersion = 4
 
 const (
 	maxIdentifierLength  = 1024
@@ -116,6 +116,55 @@ type VulnerabilitySync struct {
 	SynchronizedAt  time.Time `json:"synchronized_at"`
 	Packages        int       `json:"packages"`
 	Vulnerabilities int       `json:"vulnerabilities"`
+}
+
+// FindingMatch is one package-version vulnerability match produced by a
+// trusted local snapshot scan.
+type FindingMatch struct {
+	Ecosystem        string
+	Component        string
+	ComponentVersion string
+	VulnerabilityID  string
+	Aliases          []string
+	Summary          string
+}
+
+// Finding is a durable potential-impact record for one shipped release.
+type Finding struct {
+	Product           string     `json:"product"`
+	Release           string     `json:"release"`
+	Ecosystem         string     `json:"ecosystem"`
+	Component         string     `json:"component"`
+	ComponentVersion  string     `json:"component_version"`
+	VulnerabilityID   string     `json:"id"`
+	Aliases           []string   `json:"aliases"`
+	Summary           string     `json:"summary,omitempty"`
+	Status            string     `json:"status"`
+	Active            bool       `json:"active"`
+	FirstSeenAt       time.Time  `json:"first_seen_at"`
+	LastSeenAt        time.Time  `json:"last_seen_at"`
+	NoLongerMatchedAt *time.Time `json:"no_longer_matched_at,omitempty"`
+}
+
+// FindingFilter limits a finding list to a release and optionally includes
+// records that no longer match the current local vulnerability snapshot.
+type FindingFilter struct {
+	Product         string
+	Release         string
+	IncludeInactive bool
+}
+
+// FindingScanResult summarizes the lifecycle changes committed by a scan.
+type FindingScanResult struct {
+	Product         string    `json:"product"`
+	Release         string    `json:"release"`
+	ScannedAt       time.Time `json:"scanned_at"`
+	Components      int       `json:"components"`
+	Matched         int       `json:"matched"`
+	New             int       `json:"new"`
+	Existing        int       `json:"existing"`
+	Reopened        int       `json:"reopened"`
+	NoLongerMatched int       `json:"no_longer_matched"`
 }
 
 // Open opens a database, creates its parent directory when needed, and applies
@@ -296,6 +345,50 @@ func (d *DB) migrate(ctx context.Context) error {
 			`CREATE INDEX vulnerability_aliases_alias_idx ON vulnerability_aliases(alias)`,
 			`CREATE INDEX package_vulnerability_matches_vulnerability_idx ON package_vulnerability_matches(vulnerability_id)`,
 			`PRAGMA user_version = 3`,
+		}
+		for _, statement := range statements {
+			if _, err := transaction.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("apply schema migration: %w", err)
+			}
+		}
+	}
+
+	if currentVersion < 4 {
+		statements := []string{
+			`CREATE TABLE finding_scans (
+				id INTEGER PRIMARY KEY,
+				release_id INTEGER NOT NULL REFERENCES releases(id) ON DELETE CASCADE,
+				data_source TEXT NOT NULL,
+				synchronized_at TEXT NOT NULL DEFAULT '',
+				scanned_at TEXT NOT NULL,
+				component_count INTEGER NOT NULL,
+				matched_count INTEGER NOT NULL,
+				new_count INTEGER NOT NULL,
+				existing_count INTEGER NOT NULL,
+				reopened_count INTEGER NOT NULL,
+				no_longer_matched_count INTEGER NOT NULL
+			)`,
+			`CREATE TABLE findings (
+				id INTEGER PRIMARY KEY,
+				release_id INTEGER NOT NULL REFERENCES releases(id) ON DELETE CASCADE,
+				ecosystem TEXT NOT NULL,
+				component_name TEXT NOT NULL,
+				component_version TEXT NOT NULL,
+				vulnerability_id TEXT NOT NULL,
+				aliases_json TEXT NOT NULL DEFAULT '[]',
+				summary TEXT NOT NULL DEFAULT '',
+				review_status TEXT NOT NULL DEFAULT 'needs-review',
+				active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
+				first_seen_at TEXT NOT NULL,
+				last_seen_at TEXT NOT NULL,
+				no_longer_matched_at TEXT NOT NULL DEFAULT '',
+				last_scan_id INTEGER NOT NULL REFERENCES finding_scans(id),
+				UNIQUE(release_id, ecosystem, component_name, component_version, vulnerability_id)
+			)`,
+			`CREATE INDEX finding_scans_release_id_idx ON finding_scans(release_id, scanned_at)`,
+			`CREATE INDEX findings_release_active_idx ON findings(release_id, active)`,
+			`CREATE INDEX findings_vulnerability_id_idx ON findings(vulnerability_id)`,
+			`PRAGMA user_version = 4`,
 		}
 		for _, statement := range statements {
 			if _, err := transaction.ExecContext(ctx, statement); err != nil {
@@ -987,6 +1080,314 @@ func (d *DB) LatestVulnerabilitySync(ctx context.Context) (VulnerabilitySync, er
 		return VulnerabilitySync{}, err
 	}
 	return result, nil
+}
+
+// ReconcileFindings atomically records a local scan and updates the durable
+// finding lifecycle for one release. Missing matches are retained as inactive
+// evidence instead of being deleted.
+func (d *DB) ReconcileFindings(
+	ctx context.Context,
+	productName string,
+	releaseVersion string,
+	matches []FindingMatch,
+	dataSource string,
+	synchronizedAt time.Time,
+	componentCount int,
+) (FindingScanResult, error) {
+	var err error
+	productName, err = cleanIdentifier("product name", productName)
+	if err != nil {
+		return FindingScanResult{}, err
+	}
+	releaseVersion, err = cleanIdentifier("release version", releaseVersion)
+	if err != nil {
+		return FindingScanResult{}, err
+	}
+	dataSource, err = cleanIdentifier("finding data source", dataSource)
+	if err != nil {
+		return FindingScanResult{}, err
+	}
+	if componentCount < 0 {
+		return FindingScanResult{}, errors.New("component count cannot be negative")
+	}
+
+	type findingKey struct {
+		ecosystem        string
+		component        string
+		componentVersion string
+		vulnerabilityID  string
+	}
+	cleaned := make(map[findingKey]FindingMatch, len(matches))
+	for index, match := range matches {
+		for _, target := range []struct {
+			label string
+			value *string
+		}{
+			{label: "finding ecosystem", value: &match.Ecosystem},
+			{label: "finding component", value: &match.Component},
+			{label: "finding component version", value: &match.ComponentVersion},
+			{label: "finding vulnerability ID", value: &match.VulnerabilityID},
+		} {
+			*target.value, err = cleanIdentifier(target.label, *target.value)
+			if err != nil {
+				return FindingScanResult{}, fmt.Errorf("match %d: %w", index+1, err)
+			}
+		}
+		match.Summary, err = cleanDescription(match.Summary)
+		if err != nil {
+			return FindingScanResult{}, fmt.Errorf("match %d summary: %w", index+1, err)
+		}
+		aliases := make([]string, 0, len(match.Aliases))
+		seenAliases := make(map[string]struct{}, len(match.Aliases))
+		for _, alias := range match.Aliases {
+			alias, err = cleanIdentifier("finding alias", alias)
+			if err != nil {
+				return FindingScanResult{}, fmt.Errorf("match %d: %w", index+1, err)
+			}
+			if _, exists := seenAliases[alias]; !exists {
+				seenAliases[alias] = struct{}{}
+				aliases = append(aliases, alias)
+			}
+		}
+		match.Aliases = aliases
+		key := findingKey{match.Ecosystem, match.Component, match.ComponentVersion, match.VulnerabilityID}
+		cleaned[key] = match
+	}
+
+	transaction, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return FindingScanResult{}, fmt.Errorf("begin finding reconciliation: %w", err)
+	}
+	defer transaction.Rollback()
+
+	var releaseID int64
+	var canonicalProduct, canonicalRelease string
+	err = transaction.QueryRowContext(ctx, `SELECT r.id, p.name, r.version
+		FROM releases r JOIN products p ON p.id = r.product_id
+		WHERE p.name = ? COLLATE NOCASE AND r.version = ?`, productName, releaseVersion,
+	).Scan(&releaseID, &canonicalProduct, &canonicalRelease)
+	if errors.Is(err, sql.ErrNoRows) {
+		return FindingScanResult{}, fmt.Errorf("release %s@%s: %w", productName, releaseVersion, ErrNotFound)
+	}
+	if err != nil {
+		return FindingScanResult{}, fmt.Errorf("find release for finding reconciliation: %w", err)
+	}
+
+	scannedAt := time.Now().UTC().Truncate(time.Second)
+	synchronizedAtText := ""
+	if !synchronizedAt.IsZero() {
+		synchronizedAtText = formatTime(synchronizedAt.UTC().Truncate(time.Second))
+	}
+	scanInsert, err := transaction.ExecContext(ctx, `INSERT INTO finding_scans(
+		release_id, data_source, synchronized_at, scanned_at, component_count,
+		matched_count, new_count, existing_count, reopened_count, no_longer_matched_count
+	) VALUES (?, ?, ?, ?, ?, 0, 0, 0, 0, 0)`,
+		releaseID, dataSource, synchronizedAtText, formatTime(scannedAt), componentCount,
+	)
+	if err != nil {
+		return FindingScanResult{}, fmt.Errorf("record finding scan: %w", err)
+	}
+	scanID, err := scanInsert.LastInsertId()
+	if err != nil {
+		return FindingScanResult{}, fmt.Errorf("read finding scan ID: %w", err)
+	}
+
+	type storedFinding struct {
+		id     int64
+		active bool
+	}
+	existing := make(map[findingKey]storedFinding)
+	rows, err := transaction.QueryContext(ctx, `SELECT id, ecosystem, component_name,
+		component_version, vulnerability_id, active FROM findings WHERE release_id = ?`, releaseID)
+	if err != nil {
+		return FindingScanResult{}, fmt.Errorf("read existing findings: %w", err)
+	}
+	for rows.Next() {
+		var key findingKey
+		var stored storedFinding
+		var active int
+		if err := rows.Scan(
+			&stored.id, &key.ecosystem, &key.component, &key.componentVersion,
+			&key.vulnerabilityID, &active,
+		); err != nil {
+			rows.Close()
+			return FindingScanResult{}, fmt.Errorf("read existing finding: %w", err)
+		}
+		stored.active = active == 1
+		existing[key] = stored
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return FindingScanResult{}, fmt.Errorf("read existing findings: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return FindingScanResult{}, fmt.Errorf("close existing findings: %w", err)
+	}
+
+	result := FindingScanResult{
+		Product: canonicalProduct, Release: canonicalRelease, ScannedAt: scannedAt,
+		Components: componentCount, Matched: len(cleaned),
+	}
+	for key, match := range cleaned {
+		aliasesJSON, marshalErr := json.Marshal(nonNilStrings(match.Aliases))
+		if marshalErr != nil {
+			return FindingScanResult{}, fmt.Errorf("encode finding aliases for %s: %w", match.VulnerabilityID, marshalErr)
+		}
+		stored, exists := existing[key]
+		if !exists {
+			_, err = transaction.ExecContext(ctx, `INSERT INTO findings(
+				release_id, ecosystem, component_name, component_version, vulnerability_id,
+				aliases_json, summary, active, first_seen_at, last_seen_at,
+				no_longer_matched_at, last_scan_id
+			) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, '', ?)`,
+				releaseID, match.Ecosystem, match.Component, match.ComponentVersion,
+				match.VulnerabilityID, string(aliasesJSON), match.Summary,
+				formatTime(scannedAt), formatTime(scannedAt), scanID,
+			)
+			if err != nil {
+				return FindingScanResult{}, fmt.Errorf("create finding %s: %w", match.VulnerabilityID, err)
+			}
+			result.New++
+			continue
+		}
+
+		_, err = transaction.ExecContext(ctx, `UPDATE findings SET
+			aliases_json = ?, summary = ?, active = 1, last_seen_at = ?,
+			no_longer_matched_at = '', last_scan_id = ? WHERE id = ?`,
+			string(aliasesJSON), match.Summary, formatTime(scannedAt), scanID, stored.id,
+		)
+		if err != nil {
+			return FindingScanResult{}, fmt.Errorf("refresh finding %s: %w", match.VulnerabilityID, err)
+		}
+		if stored.active {
+			result.Existing++
+		} else {
+			result.Reopened++
+		}
+	}
+
+	for key, stored := range existing {
+		if !stored.active {
+			continue
+		}
+		if _, stillMatched := cleaned[key]; stillMatched {
+			continue
+		}
+		_, err = transaction.ExecContext(ctx, `UPDATE findings SET
+			active = 0, no_longer_matched_at = ?, last_scan_id = ? WHERE id = ?`,
+			formatTime(scannedAt), scanID, stored.id,
+		)
+		if err != nil {
+			return FindingScanResult{}, fmt.Errorf("close finding %s: %w", key.vulnerabilityID, err)
+		}
+		result.NoLongerMatched++
+	}
+
+	_, err = transaction.ExecContext(ctx, `UPDATE finding_scans SET
+		matched_count = ?, new_count = ?, existing_count = ?, reopened_count = ?,
+		no_longer_matched_count = ? WHERE id = ?`, result.Matched, result.New,
+		result.Existing, result.Reopened, result.NoLongerMatched, scanID)
+	if err != nil {
+		return FindingScanResult{}, fmt.Errorf("finalize finding scan: %w", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return FindingScanResult{}, fmt.Errorf("commit finding reconciliation: %w", err)
+	}
+	return result, nil
+}
+
+// ListFindings returns durable findings ordered by shipped release and
+// vulnerability identity. Inactive records are excluded by default.
+func (d *DB) ListFindings(ctx context.Context, filter FindingFilter) ([]Finding, error) {
+	filter.Product = strings.TrimSpace(filter.Product)
+	filter.Release = strings.TrimSpace(filter.Release)
+	if filter.Release != "" && filter.Product == "" {
+		return nil, errors.New("finding release filter requires a product")
+	}
+	var err error
+	if filter.Product != "" {
+		filter.Product, err = cleanIdentifier("product name", filter.Product)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if filter.Release != "" {
+		filter.Release, err = cleanIdentifier("release version", filter.Release)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	query := `SELECT p.name, r.version, f.ecosystem, f.component_name,
+		f.component_version, f.vulnerability_id, f.aliases_json, f.summary,
+		f.review_status, f.active, f.first_seen_at, f.last_seen_at,
+		f.no_longer_matched_at
+		FROM findings f
+		JOIN releases r ON r.id = f.release_id
+		JOIN products p ON p.id = r.product_id WHERE 1 = 1`
+	args := make([]any, 0, 2)
+	if filter.Product != "" {
+		query += " AND p.name = ? COLLATE NOCASE"
+		args = append(args, filter.Product)
+	}
+	if filter.Release != "" {
+		query += " AND r.version = ?"
+		args = append(args, filter.Release)
+	}
+	if !filter.IncludeInactive {
+		query += " AND f.active = 1"
+	}
+	query += ` ORDER BY p.name COLLATE NOCASE, r.version, f.vulnerability_id,
+		f.ecosystem, f.component_name, f.component_version`
+
+	rows, err := d.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list findings: %w", err)
+	}
+	defer rows.Close()
+	findings := make([]Finding, 0)
+	for rows.Next() {
+		var finding Finding
+		var aliasesJSON, reviewStatus, firstSeenAt, lastSeenAt, noLongerMatchedAt string
+		var active int
+		if err := rows.Scan(
+			&finding.Product, &finding.Release, &finding.Ecosystem, &finding.Component,
+			&finding.ComponentVersion, &finding.VulnerabilityID, &aliasesJSON,
+			&finding.Summary, &reviewStatus, &active, &firstSeenAt, &lastSeenAt,
+			&noLongerMatchedAt,
+		); err != nil {
+			return nil, fmt.Errorf("read finding: %w", err)
+		}
+		if err := json.Unmarshal([]byte(aliasesJSON), &finding.Aliases); err != nil {
+			return nil, fmt.Errorf("decode finding aliases for %s: %w", finding.VulnerabilityID, err)
+		}
+		finding.Aliases = nonNilStrings(finding.Aliases)
+		finding.Active = active == 1
+		finding.Status = reviewStatus
+		if !finding.Active {
+			finding.Status = "no-longer-matched"
+		}
+		finding.FirstSeenAt, err = parseTime(firstSeenAt)
+		if err != nil {
+			return nil, err
+		}
+		finding.LastSeenAt, err = parseTime(lastSeenAt)
+		if err != nil {
+			return nil, err
+		}
+		if noLongerMatchedAt != "" {
+			value, parseErr := parseTime(noLongerMatchedAt)
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			finding.NoLongerMatchedAt = &value
+		}
+		findings = append(findings, finding)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list findings: %w", err)
+	}
+	return findings, nil
 }
 
 func nonNilStrings(values []string) []string {

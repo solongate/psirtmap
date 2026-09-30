@@ -285,6 +285,7 @@ func TestDashboardRendersEverySectionWithInventory(t *testing.T) {
 		{screenProducts, []string{"Products", "AG-200", "Industrial gateway"}},
 		{screenReleases, []string{"Releases", "AG-200@2.2", "1"}},
 		{screenComponents, []string{"Components", "openssl@3.0.8", "Alpine"}},
+		{screenFindings, []string{"Findings", "No active findings yet"}},
 		{screenScanner, []string{"Release scanner", "AG-200@2.2", "Press u to update"}},
 	}
 	for _, check := range checks {
@@ -360,13 +361,24 @@ func TestDashboardScansSelectedRelease(t *testing.T) {
 	loadDashboard(t, model)
 
 	message := model.scanRelease(release)().(dashboardScanMsg)
-	if message.err != nil || len(message.result.Findings) != 1 {
+	if message.err != nil || len(message.result.Findings) != 1 || !message.result.Persisted || message.result.New != 1 {
 		t.Fatalf("scan message = %+v", message)
 	}
 	model.scanning = true
-	model.Update(message)
+	_, refresh := model.Update(message)
 	if model.scanning || model.scan == nil || model.scan.Findings[0].ID != "CVE-2026-12345" || querier.calls != 0 {
 		t.Fatalf("scan state = %+v; calls = %d", model.scan, querier.calls)
+	}
+	if refresh == nil {
+		t.Fatal("successful scan did not request a finding refresh")
+	}
+	model.Update(refresh())
+	if len(model.data.findings) != 1 || model.data.findings[0].VulnerabilityID != "CVE-2026-12345" {
+		t.Fatalf("dashboard findings = %+v", model.data.findings)
+	}
+	model.screen = screenFindings
+	if content := model.View().Content; !strings.Contains(content, "CVE-2026-12345") || !strings.Contains(content, "openssl@3.0.8") {
+		t.Fatalf("findings view = %q", content)
 	}
 	model.screen = screenScanner
 	if !strings.Contains(model.View().Content, "NEEDS REVIEW") {

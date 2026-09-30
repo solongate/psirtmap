@@ -27,8 +27,8 @@ firmware, and embedded-software manufacturers.
 > [!IMPORTANT]
 > PSIRTMap is pre-1.0. Normal release scans use a local OSV snapshot and do not
 > require internet access after `psirtmap sync`. Creating transferable feed
-> bundles for fully isolated environments, persistent findings, and human
-> assessments are planned—not shipped.
+> bundles for fully isolated environments and human assessments are
+> planned—not shipped.
 
 ## Why PSIRTMap?
 
@@ -48,7 +48,7 @@ is useful evidence; it is not proof that a shipped product is exploitable.
 
 ## What works today
 
-The current release, `v0.0.5`, includes:
+The current release, `v0.0.6`, includes:
 
 - A responsive, keyboard-driven terminal dashboard.
 - Local SQLite inventory for products, releases, and components.
@@ -56,13 +56,15 @@ The current release, `v0.0.5`, includes:
 - Guided product, release, and component creation.
 - Atomic OSV synchronization for the package versions in the local inventory.
 - Local release scanning with source and snapshot freshness metadata.
+- Durable findings with new, existing, reopened, and no-longer-matched states.
+- A release-filterable `findings` command and dashboard view.
 - An explicit `--live` scan mode for direct OSV checks.
 - Human-readable and deterministic JSON output.
 - Single-binary builds for macOS, Linux, and Windows.
 - No account, database server, or PSIRTMap cloud service.
 
-See the [roadmap](ROADMAP.md) for the ordered path to local vulnerability data,
-finding history, assessments, CISA KEV enrichment, offline feeds, and VEX.
+See the [roadmap](ROADMAP.md) for the ordered path to assessments, CISA KEV
+enrichment, offline feeds, and VEX.
 
 ## Install
 
@@ -94,7 +96,7 @@ once to update the local OSV snapshot, then open **Scanner** and press `s`.
 |---|---|
 | `↑` / `↓` or `j` / `k` | Move through sections or rows |
 | `←` / `→` or `h` / `l` | Move between navigation and content |
-| `1`–`5` | Open a section directly |
+| `1`–`6` | Open a section directly |
 | `n` | Create an item in the current section |
 | `i` | Import CycloneDX JSON from **Releases** |
 | `u` | Update the local OSV snapshot; this step uses the internet |
@@ -121,6 +123,7 @@ psirtmap release import AG-200@2.2 ./firmware-2.2.cdx.json
 
 psirtmap sync
 psirtmap scan AG-200@2.2
+psirtmap findings AG-200@2.2
 ```
 
 The import accepts CycloneDX JSON 1.2–1.7, walks nested components, derives
@@ -148,6 +151,7 @@ psirtmap product list --json
 psirtmap release import AG-200@2.2 ./firmware-2.2.cdx.json --json
 psirtmap sync --json
 psirtmap scan AG-200@2.2 --json
+psirtmap findings --all --json
 ```
 
 Run `psirtmap help` or `psirtmap <command> --help` for complete usage.
@@ -161,7 +165,7 @@ CycloneDX SBOM -> Product release -> Component inventory
                                          |
 OSV API -------- psirtmap sync --------> local OSV snapshot
                                          |
-                              offline release scan -> Human review
+                              offline release scan -> durable finding -> Human review
 ```
 
 For example:
@@ -185,21 +189,27 @@ or changed component needs another successful `sync`; if any OSV query fails,
 the previous complete snapshot stays active. `check`, `sync`, and
 `scan --live` are the operations that require internet access.
 
+Every successful normal scan reconciles its matches with the release's saved
+finding history. A first match is `new`, a repeated match is `existing`, a
+returning match is `reopened`, and a finding missing from the latest complete
+scan becomes `no-longer-matched` without losing its history. `scan --live` is
+diagnostic and never changes durable findings.
+
 The explicit data model is:
 
 ```text
 PRODUCT -> RELEASE -> COMPONENT -> VULNERABILITY -> FINDING -> ASSESSMENT
 ```
 
-Vulnerability records now live locally. Findings and assessments are the next
-product milestones: scan results are currently displayed but are not yet kept
-as durable workflow records.
+Vulnerability records and findings now live locally. Human assessments are the
+next product milestone.
 
 ## Local data
 
 The default database is `~/.psirtmap/psirtmap.db`. PSIRTMap creates it with
 permissions `0600` and applies compatible schema migrations automatically. It
-contains both shipped-product inventory and the active OSV snapshot.
+contains shipped-product inventory, the active OSV snapshot, scan audit
+records, and durable finding history.
 
 Choose another database with either:
 

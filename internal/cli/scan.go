@@ -28,12 +28,17 @@ type finding struct {
 }
 
 type scanResult struct {
-	Product        string    `json:"product"`
-	Release        string    `json:"release"`
-	Components     int       `json:"components"`
-	DataSource     string    `json:"data_source"`
-	SynchronizedAt string    `json:"synchronized_at,omitempty"`
-	Findings       []finding `json:"findings"`
+	Product         string    `json:"product"`
+	Release         string    `json:"release"`
+	Components      int       `json:"components"`
+	DataSource      string    `json:"data_source"`
+	SynchronizedAt  string    `json:"synchronized_at,omitempty"`
+	Persisted       bool      `json:"persisted"`
+	New             int       `json:"new"`
+	Existing        int       `json:"existing"`
+	Reopened        int       `json:"reopened"`
+	NoLongerMatched int       `json:"no_longer_matched"`
+	Findings        []finding `json:"findings"`
 }
 
 type scanOptions struct {
@@ -112,11 +117,48 @@ func runScan(
 	if err != nil {
 		return commandError(stderr, err)
 	}
+	if !options.live {
+		if err := persistScanResult(ctx, database, &result); err != nil {
+			return commandError(stderr, err)
+		}
+	}
 
 	if options.jsonOutput {
 		return printJSON(stdout, stderr, result)
 	}
 	return printScanText(stdout, stderr, result)
+}
+
+func persistScanResult(ctx context.Context, database *store.DB, result *scanResult) error {
+	matches := make([]store.FindingMatch, 0, len(result.Findings))
+	for _, item := range result.Findings {
+		matches = append(matches, store.FindingMatch{
+			Ecosystem: item.Ecosystem, Component: item.Component,
+			ComponentVersion: item.ComponentVersion, VulnerabilityID: item.ID,
+			Aliases: item.Aliases, Summary: item.Summary,
+		})
+	}
+	var synchronizedAt time.Time
+	if result.SynchronizedAt != "" {
+		parsed, err := time.Parse(time.RFC3339, result.SynchronizedAt)
+		if err != nil {
+			return fmt.Errorf("parse scan synchronization time: %w", err)
+		}
+		synchronizedAt = parsed
+	}
+	reconciled, err := database.ReconcileFindings(
+		ctx, result.Product, result.Release, matches, result.DataSource,
+		synchronizedAt, result.Components,
+	)
+	if err != nil {
+		return err
+	}
+	result.Persisted = true
+	result.New = reconciled.New
+	result.Existing = reconciled.Existing
+	result.Reopened = reconciled.Reopened
+	result.NoLongerMatched = reconciled.NoLongerMatched
+	return nil
 }
 
 func parseScanOptions(args []string) (scanOptions, error) {
@@ -312,6 +354,13 @@ func printScanText(stdout io.Writer, stderr io.Writer, result scanResult) int {
 	}
 	fmt.Fprintf(stdout, "COMPONENTS\n%d\n\n", result.Components)
 	fmt.Fprintf(stdout, "POTENTIAL FINDINGS\n%d\n", len(result.Findings))
+	if result.Persisted {
+		fmt.Fprintln(stdout, "\nFINDING CHANGES")
+		fmt.Fprintf(stdout, "New %d  Existing %d  Reopened %d  No longer matched %d\n",
+			result.New, result.Existing, result.Reopened, result.NoLongerMatched)
+	} else {
+		fmt.Fprintln(stdout, "\nLive results are diagnostic and were not saved.")
+	}
 
 	if len(result.Findings) == 0 {
 		fmt.Fprintln(stdout, "\nNo known vulnerabilities found.")

@@ -21,6 +21,7 @@ Inventory commands:
   component   Add and list release components
   sync        Update the local OSV snapshot for inventory packages
   scan        Match a release against the local OSV snapshot
+  findings    List durable potential-impact findings
 
 Other commands:
   check       Query OSV for one package version
@@ -112,6 +113,17 @@ Usage:
 
 Sync requires internet access. All OSV queries must succeed before the new
 snapshot is committed, so a failed update leaves the previous snapshot intact.`)
+}
+
+func printFindingsUsage(writer io.Writer) {
+	fmt.Fprintln(writer, `List findings saved by local release scans.
+
+Usage:
+  psirtmap findings [product@release] [--all] [--json]
+
+By default only active matches are shown. Use --all to include findings that no
+longer match the current local OSV snapshot. Live scans are diagnostic and are
+never written to the finding history.`)
 }
 
 func printDashboardUsage(writer io.Writer) {
