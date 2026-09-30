@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -77,7 +78,7 @@ func TestDashboardLoadsAndRendersRealInventory(t *testing.T) {
 	}
 
 	view := model.View()
-	for _, expected := range []string{"PSIRTMAP", "Overview", "1", "Local inventory", "OSV live queries"} {
+	for _, expected := range []string{"PSIRTMAP", "Overview", "1", "Local inventory", "CycloneDX import", "OSV live queries"} {
 		if !strings.Contains(view.Content, expected) {
 			t.Errorf("dashboard view does not contain %q", expected)
 		}
@@ -185,6 +186,38 @@ func TestDashboardCreatesReleaseAndComponentFromGuidedDefaults(t *testing.T) {
 	}
 	if components[0].Ecosystem != "Alpine" || components[0].Name != "openssl" || components[0].Version != "3.0.8" {
 		t.Fatalf("component = %+v", components[0])
+	}
+}
+
+func TestDashboardImportsCycloneDXFromReleaseScreen(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database := newDashboardTestDatabase(t)
+	if _, err := database.CreateProduct(ctx, "AG-200", ""); err != nil {
+		t.Fatal(err)
+	}
+	model := newDashboardModel(ctx, database, &dashboardQuerier{})
+	loadDashboard(t, model)
+	model.screen = screenReleases
+	model.openImportForm()
+	if model.form.kind != formSBOMImport || len(model.form.fields) != 2 {
+		t.Fatalf("import form = %+v", model.form)
+	}
+	if got := model.form.fields[0].input.Value(); got != "AG-200@2.2" {
+		t.Fatalf("release import default = %q", got)
+	}
+	model.form.fields[1].input.SetValue(filepath.Join("..", "..", "examples", "ag-200", "firmware-2.2.cdx.json"))
+	saved, ok := model.saveForm()().(dashboardSavedMsg)
+	if !ok || saved.err != nil {
+		t.Fatalf("saveForm() = %#v", saved)
+	}
+	if !strings.Contains(saved.message, "Imported 3 components into AG-200@2.2") {
+		t.Fatalf("saved message = %q", saved.message)
+	}
+	components, err := database.ListComponents(ctx, "AG-200", "2.2")
+	if err != nil || len(components) != 3 {
+		t.Fatalf("ListComponents() = %+v, %v", components, err)
 	}
 }
 

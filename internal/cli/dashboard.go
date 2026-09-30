@@ -73,6 +73,7 @@ const (
 	formProduct
 	formRelease
 	formComponent
+	formSBOMImport
 )
 
 type dashboardField struct {
@@ -278,6 +279,8 @@ func (m *dashboardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(m.loadInventory(), m.spinner.Tick)
 		case "n":
 			return m, m.openCreateForm()
+		case "i":
+			return m, m.openImportForm()
 		case "s":
 			if m.screen == screenScanner {
 				return m.startScan()
@@ -308,6 +311,32 @@ func (m *dashboardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m *dashboardModel) openImportForm() tea.Cmd {
+	if m.screen != screenReleases {
+		m.setStatus("Open Releases and press i to import a CycloneDX SBOM", false)
+		return nil
+	}
+	if len(m.data.products) == 0 {
+		m.setStatus("Create a product before importing a release SBOM", true)
+		return nil
+	}
+	reference := m.data.products[min(m.selected[screenProducts], len(m.data.products)-1)].Name + "@2.2"
+	if len(m.data.releases) > 0 {
+		release := m.data.releases[min(m.selected[screenReleases], len(m.data.releases)-1)]
+		reference = release.Product + "@" + release.Version
+	}
+	m.form = dashboardForm{
+		kind:  formSBOMImport,
+		title: "Import CycloneDX release SBOM",
+		fields: []dashboardField{
+			newDashboardFieldWithValue("Product@release", "Existing product; the release may be new", reference),
+			newDashboardField("CycloneDX JSON path", "Absolute or current-directory-relative file path", "./firmware.cdx.json"),
+		},
+	}
+	m.form.fields[0].input.Focus()
+	return nil
 }
 
 func (m *dashboardModel) updateForm(message tea.Msg) (tea.Model, tea.Cmd) {
@@ -345,7 +374,7 @@ func (m *dashboardModel) updateForm(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "esc":
 			m.form = dashboardForm{}
-			m.setStatus("Create action canceled", false)
+			m.setStatus("Action canceled", false)
 			return m, nil
 		case "tab", "down":
 			return m, m.focusFormField(1)
@@ -470,6 +499,19 @@ func (m *dashboardModel) saveForm() tea.Cmd {
 			return dashboardSavedMsg{
 				message: fmt.Sprintf("Added %s@%s to %s@%s", component.Name, component.Version, component.Product, component.ReleaseVersion),
 				err:     err,
+			}
+		case formSBOMImport:
+			product, release, err := splitReference(values[0], "release")
+			if err != nil {
+				return dashboardSavedMsg{err: err}
+			}
+			result, err := importReleaseSBOM(m.ctx, m.database, product, release, values[1])
+			return dashboardSavedMsg{
+				message: fmt.Sprintf(
+					"Imported %d components into %s@%s (%d skipped)",
+					result.Imported, result.Product, result.Release, result.Skipped,
+				),
+				err: err,
 			}
 		default:
 			return dashboardSavedMsg{err: errors.New("unknown create action")}
@@ -728,15 +770,24 @@ func (m *dashboardModel) renderOverview(width, height int) string {
 	lines := []string{title, "", counts, "", styleTitle.Render("Data sources")}
 	lines = append(lines,
 		statusLine("●", "Local inventory", "READY", true),
+		statusLine("●", "CycloneDX import", "READY", true),
 		statusLine("●", "OSV live queries", "READY", true),
-		statusLine("○", "CISA KEV enrichment", "PLANNED", false),
-		statusLine("○", "Offline vulnerability feed", "PLANNED", false),
-		"",
-		styleTitle.Render("Quick start"),
-		"  1. Press n to create a product",
-		"  2. Open Releases and create a shipped version",
-		"  3. Add its components, then scan the release",
 	)
+	if height >= 12 {
+		lines = append(lines,
+			statusLine("○", "CISA KEV enrichment", "PLANNED", false),
+			statusLine("○", "Offline vulnerability feed", "PLANNED", false),
+		)
+	}
+	if height >= 15 {
+		lines = append(lines,
+			"",
+			styleTitle.Render("Quick start"),
+			"  1. Press n to create a product",
+			"  2. Open Releases and press i to import its CycloneDX SBOM",
+			"  3. Review the imported components, then scan the release",
+		)
+	}
 	if len(m.data.releases) > 0 && height > 17 {
 		lines = append(lines, "", styleTitle.Render("Shipped releases"))
 		start := max(0, len(m.data.releases)-3)
@@ -783,7 +834,7 @@ func (m *dashboardModel) renderReleases(width, height int) string {
 		styleMuted.Render("Release" + strings.Repeat(" ", 24) + "Components"),
 	}
 	if len(m.data.releases) == 0 {
-		return strings.Join(append(lines, "", "No releases yet.", styleMuted.Render("Press n to add a release to an existing product.")), "\n")
+		return strings.Join(append(lines, "", "No releases yet.", styleMuted.Render("Press n to add one manually or i to import a CycloneDX SBOM.")), "\n")
 	}
 	rows := visibleRange(len(m.data.releases), m.selected[screenReleases], max(1, height-4))
 	for index := rows.start; index < rows.end; index++ {
@@ -889,7 +940,11 @@ func (m *dashboardModel) renderForm(width int) string {
 	}
 	lines = append(lines, "")
 	if m.loading {
-		lines = append(lines, m.spinner.View()+" Saving locally...")
+		message := " Saving locally..."
+		if m.form.kind == formSBOMImport {
+			message = " Validating and importing SBOM..."
+		}
+		lines = append(lines, m.spinner.View()+message)
 	} else if m.form.err != nil {
 		lines = append(lines, styleError.Render("Error: "+oneLine(m.form.err.Error())))
 	} else {
@@ -908,6 +963,7 @@ func (m *dashboardModel) renderHelp(width int) string {
 		helpRow("Tab", "Switch between navigation and content"),
 		helpRow("1–5", "Open a section directly"),
 		helpRow("n", "Create an item for the current section"),
+		helpRow("i", "Import CycloneDX JSON from Releases"),
 		helpRow("s / Enter", "Scan the selected release"),
 		helpRow("r", "Refresh local inventory"),
 		helpRow("? / Esc", "Close this help"),
@@ -928,6 +984,7 @@ func (m *dashboardModel) renderFooter() string {
 		styleKey.Render("↑↓") + " move",
 		styleKey.Render("→/enter") + " open",
 		styleKey.Render("n") + " new",
+		styleKey.Render("i") + " import",
 		styleKey.Render("s") + " scan",
 		styleKey.Render("?") + " help",
 		styleKey.Render("q") + " quit",

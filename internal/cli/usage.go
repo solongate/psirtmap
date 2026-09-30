@@ -17,7 +17,7 @@ Interactive:
 Inventory commands:
   init        Initialize the local database
   product     Add and list products
-  release     Add and list product releases
+  release     Add, import, and list product releases
   component   Add and list release components
   scan        Match a release's components against OSV
 
@@ -67,7 +67,12 @@ func printReleaseUsage(writer io.Writer) {
 
 Usage:
   psirtmap release add <product> <version> [--json]
+  psirtmap release import <product>@<release> <bom.cdx.json> [--json]
   psirtmap release list [product] [--json]
+
+Import accepts CycloneDX JSON versions 1.2 through 1.7. A missing release is
+created atomically after the document and importable package identities have
+been validated.
 
 "create" is accepted as an alias for "add".`)
 }

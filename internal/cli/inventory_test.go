@@ -167,6 +167,78 @@ func TestInventoryJSONOutputIsStable(t *testing.T) {
 	}
 }
 
+func TestReleaseImportCycloneDXWorkflow(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "inventory.db")
+	querier := &inventoryQuerier{results: map[string]packageResult{}}
+	example := filepath.Join("..", "..", "examples", "ag-200", "firmware-2.2.cdx.json")
+
+	exitCode, _, stderr := runWithDatabase(t, path, querier, "product", "add", "AG-200")
+	requireSuccess(t, exitCode, stderr)
+	exitCode, stdout, stderr := runWithDatabase(t, path, querier, "release", "import", "AG-200@2.2", example)
+	requireSuccess(t, exitCode, stderr)
+	for _, expected := range []string{
+		"CycloneDX JSON detected", "Release created: yes", "Components discovered: 3",
+		"Imported:              3", "Skipped:               0",
+	} {
+		if !strings.Contains(stdout, expected) {
+			t.Errorf("release import stdout = %q, want %q", stdout, expected)
+		}
+	}
+
+	exitCode, stdout, stderr = runWithDatabase(t, path, querier, "component", "list", "AG-200@2.2", "--json")
+	requireSuccess(t, exitCode, stderr)
+	var components []struct {
+		Ecosystem string `json:"ecosystem"`
+		Name      string `json:"name"`
+		PURL      string `json:"purl"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &components); err != nil {
+		t.Fatalf("decode imported components %q: %v", stdout, err)
+	}
+	if len(components) != 3 || components[0].Ecosystem != "Alpine" || !strings.HasPrefix(components[0].PURL, "pkg:apk/alpine/") {
+		t.Fatalf("imported components = %+v", components)
+	}
+
+	exitCode, stdout, stderr = runWithDatabase(t, path, querier, "release", "import", "AG-200@2.2", example, "--json")
+	requireSuccess(t, exitCode, stderr)
+	var second struct {
+		CreatedRelease bool `json:"created_release"`
+		Imported       int  `json:"imported"`
+		AlreadyPresent int  `json:"already_present"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &second); err != nil {
+		t.Fatalf("decode repeated import %q: %v", stdout, err)
+	}
+	if second.CreatedRelease || second.Imported != 0 || second.AlreadyPresent != 3 {
+		t.Fatalf("repeated import = %+v", second)
+	}
+}
+
+func TestReleaseImportRejectsInvalidSBOMWithoutCreatingRelease(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	databasePath := filepath.Join(directory, "inventory.db")
+	invalidPath := filepath.Join(directory, "invalid.cdx.json")
+	if err := os.WriteFile(invalidPath, []byte(`{"bomFormat":"SPDX","specVersion":"1.6","version":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	querier := &inventoryQuerier{}
+	exitCode, _, stderr := runWithDatabase(t, databasePath, querier, "product", "add", "AG-200")
+	requireSuccess(t, exitCode, stderr)
+	exitCode, _, stderr = runWithDatabase(t, databasePath, querier, "release", "import", "AG-200@2.2", invalidPath)
+	if exitCode != 1 || !strings.Contains(stderr, "expected CycloneDX") {
+		t.Fatalf("invalid import = code %d, stderr %q", exitCode, stderr)
+	}
+	exitCode, stdout, stderr := runWithDatabase(t, databasePath, querier, "release", "list", "AG-200", "--json")
+	requireSuccess(t, exitCode, stderr)
+	if strings.TrimSpace(stdout) != "[]" {
+		t.Fatalf("failed import created release: %q", stdout)
+	}
+}
+
 func TestInventoryCLIReportsConflictsAndMissingParents(t *testing.T) {
 	t.Parallel()
 
@@ -264,7 +336,7 @@ func TestRootCommandsAndUsageErrors(t *testing.T) {
 		useStderr  bool
 	}{
 		{name: "root help", args: []string{"--help"}, wantCode: 0, wantOutput: "Inventory commands:"},
-		{name: "version", args: []string{"version"}, wantCode: 0, wantOutput: "0.0.3"},
+		{name: "version", args: []string{"version"}, wantCode: 0, wantOutput: "0.0.4"},
 		{name: "unknown", args: []string{"wat"}, wantCode: 2, wantOutput: "unknown command", useStderr: true},
 		{name: "missing database value", args: []string{"--database"}, wantCode: 2, wantOutput: "requires a value", useStderr: true},
 	}

@@ -8,6 +8,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.5
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/mattn/go-isatty v0.0.24
+	github.com/package-url/packageurl-go v0.1.7
 	modernc.org/sqlite v1.60.1
 )
 

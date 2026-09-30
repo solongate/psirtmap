@@ -67,9 +67,9 @@
   <circle cx="392" cy="480" r="6" fill="#5eead4"/>
   <text x="410" y="486" class="mono body">OSV live queries</text>
   <text x="688" y="486" class="mono mint" font-size="16" font-weight="700">READY</text>
-  <circle cx="850" cy="440" r="6" fill="none" stroke="#f7b955" stroke-width="2"/>
-  <text x="868" y="446" class="mono body">CISA KEV</text>
-  <text x="1068" y="446" class="mono amber" font-size="16" font-weight="700">PLANNED</text>
+  <circle cx="850" cy="440" r="6" fill="#5eead4"/>
+  <text x="868" y="446" class="mono body">CycloneDX import</text>
+  <text x="1088" y="446" class="mono mint" font-size="16" font-weight="700">READY</text>
   <circle cx="850" cy="480" r="6" fill="none" stroke="#f7b955" stroke-width="2"/>
   <text x="868" y="486" class="mono body">Offline feed</text>
   <text x="1068" y="486" class="mono amber" font-size="16" font-weight="700">PLANNED</text>
@@ -80,7 +80,8 @@
   <text x="78" y="642" class="mono body"><tspan class="mint" font-weight="700">↑↓</tspan> move</text>
   <text x="214" y="642" class="mono body"><tspan class="mint" font-weight="700">→/enter</tspan> open</text>
   <text x="410" y="642" class="mono body"><tspan class="mint" font-weight="700">n</tspan> new</text>
-  <text x="520" y="642" class="mono body"><tspan class="mint" font-weight="700">s</tspan> scan</text>
-  <text x="636" y="642" class="mono body"><tspan class="mint" font-weight="700">?</tspan> help</text>
-  <text x="756" y="642" class="mono body"><tspan class="mint" font-weight="700">q</tspan> quit</text>
+  <text x="520" y="642" class="mono body"><tspan class="mint" font-weight="700">i</tspan> import</text>
+  <text x="646" y="642" class="mono body"><tspan class="mint" font-weight="700">s</tspan> scan</text>
+  <text x="756" y="642" class="mono body"><tspan class="mint" font-weight="700">?</tspan> help</text>
+  <text x="876" y="642" class="mono body"><tspan class="mint" font-weight="700">q</tspan> quit</text>
 </svg>
