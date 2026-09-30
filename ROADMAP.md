@@ -16,34 +16,50 @@ ordered so every release remains small, testable, and useful on its own.
 | Package check | Query one package version through OSV | Shipped in `v0.0.1` |
 | Product inventory | Store products, releases, and components locally | Shipped in `v0.0.2` |
 | Terminal dashboard | Manage inventory and scan releases interactively | Shipped in `v0.0.3` |
-| SBOM import | Build release inventory from CycloneDX JSON | Next |
+| SBOM import | Build release inventory from CycloneDX JSON | Shipped in `v0.0.4` |
+| Local vulnerability data | Normalize OSV data and match from local records | Next |
 | Finding lifecycle | Persist matches and track what changed | Planned |
 | Human assessment | Record impact decisions and evidence | Planned |
 | KEV enrichment | Prioritize known exploitation | Planned |
 | Offline feeds | Scan from validated, transferable feed bundles | Planned |
 | VEX | Export human assessments in a machine-readable format | Later |
 
-## Next: CycloneDX import
+## Shipped: CycloneDX import
 
-The next release will replace most manual component entry with a single,
-transactional import:
+`v0.0.4` replaced most manual component entry with a single, transactional
+import:
 
 ```sh
 psirtmap release import AG-200@2.2 ./firmware-2.2.cdx.json
 ```
 
-Planned acceptance criteria:
+The implementation:
 
-- Support CycloneDX JSON first.
-- Validate the complete document before changing the database.
-- Import package URL (purl), ecosystem, name, and version when available.
-- Deduplicate components deterministically.
-- Report imported, skipped, and invalid records clearly.
-- Keep manual component entry for demos and corrections.
+- Supports CycloneDX JSON 1.2 through 1.7.
+- Reads the complete document before changing the database.
+- Walks nested components and normalizes package URLs into OSV identities.
+- Creates a missing release and imports its components atomically.
+- Deduplicates document entries and repeated imports deterministically.
+- Records source metadata and the document SHA-256 for provenance.
+- Reports imported, already-present, duplicated, and skipped records clearly.
+- Keeps manual component entry for demos and corrections.
+
+## Next: local vulnerability data and matcher
+
+The next milestone moves vulnerability intelligence behind a stable local data
+model instead of treating live API responses as the product's long-term
+matching architecture:
+
+- Normalize OSV advisories, aliases, affected packages, and version ranges.
+- Record feed source, retrieval time, and freshness.
+- Match imported component identities against the same local data model that
+  future offline bundles will populate.
+- Keep the existing live query workflow available until the local matcher is
+  validated against representative fixtures.
 
 ## First complete PSIRT workflow
 
-After SBOM import, development proceeds in this order.
+After the local vulnerability layer, development proceeds in this order.
 
 ### 1. Persistent findings
 

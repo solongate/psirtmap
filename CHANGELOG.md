@@ -6,8 +6,18 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-09-30
+
 ### Added
 
+- Transactional CycloneDX JSON 1.2–1.7 import through
+  `psirtmap release import`.
+- Package URL parsing and normalization into supported OSV ecosystems.
+- Nested component traversal, deterministic deduplication, skip reporting,
+  document hashing, and SBOM import provenance.
+- Automatic release creation after successful import validation.
+- CycloneDX import flow in the terminal dashboard.
+- An example AG-200 CycloneDX SBOM.
 - Structured GitHub issue forms for reproducible bug reports and product
   feedback.
 - A repository-owned terminal dashboard preview and SolonGate PSIRTMap logo.
@@ -18,6 +28,8 @@ The project follows [Semantic Versioning](https://semver.org/).
   limitations, installation, and a 60-second quick start.
 - Reworked the roadmap, contribution guide, security policy, and third-party
   notices for clarity and consistency with the current release.
+- Database schema migrated to version 2 without changing existing inventory.
+- Version advanced to `0.0.4`.
 
 ## [0.0.3] - 2026-09-29
 
@@ -68,7 +80,8 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Human-readable and JSON output.
 - Automated tests, cross-platform release builds, and Apache-2.0 licensing.
 
-[Unreleased]: https://github.com/solongate/psirtmap/compare/v0.0.3...HEAD
+[Unreleased]: https://github.com/solongate/psirtmap/compare/v0.0.4...HEAD
+[0.0.4]: https://github.com/solongate/psirtmap/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/solongate/psirtmap/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/solongate/psirtmap/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/solongate/psirtmap/releases/tag/v0.0.1

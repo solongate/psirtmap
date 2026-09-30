@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -228,5 +229,117 @@ func TestCanceledContextStopsWrites(t *testing.T) {
 	cancel()
 	if _, err := database.CreateProduct(ctx, "AG-200", ""); err == nil {
 		t.Fatal("CreateProduct() error = nil with canceled context")
+	}
+}
+
+func TestImportReleaseComponentsIsAtomicAndIdempotent(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err := database.CreateProduct(ctx, "AG-200", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateRelease(ctx, "AG-200", "2.2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateComponent(ctx, "AG-200", "2.2", "Alpine", "busybox", "1.36.0"); err != nil {
+		t.Fatal(err)
+	}
+	components := []ComponentInput{
+		{Ecosystem: "Alpine", Name: "busybox", Version: "1.36.0", PURL: "pkg:apk/alpine/busybox@1.36.0"},
+		{Ecosystem: "Alpine", Name: "openssl", Version: "3.0.8-r0", PURL: "pkg:apk/alpine/openssl@3.0.8-r0"},
+	}
+	metadata := SBOMImportMetadata{
+		Format: "CycloneDX JSON", SpecVersion: "1.6", SerialNumber: "urn:uuid:test",
+		DocumentSHA256: strings.Repeat("a", 64), SourceName: "firmware.cdx.json",
+		Discovered: 3, Skipped: 1,
+	}
+
+	result, err := database.ImportReleaseComponents(ctx, "ag-200", "2.2", components, metadata)
+	if err != nil {
+		t.Fatalf("ImportReleaseComponents() error = %v", err)
+	}
+	if result.Product != "AG-200" || result.CreatedRelease || result.Imported != 1 || result.AlreadyPresent != 1 {
+		t.Fatalf("first import result = %+v", result)
+	}
+	stored, err := database.ListComponents(ctx, "AG-200", "2.2")
+	if err != nil || len(stored) != 2 || stored[0].PURL == "" || stored[1].PURL == "" {
+		t.Fatalf("ListComponents() = %+v, %v", stored, err)
+	}
+
+	result, err = database.ImportReleaseComponents(ctx, "AG-200", "2.2", components, metadata)
+	if err != nil {
+		t.Fatalf("second ImportReleaseComponents() error = %v", err)
+	}
+	if result.CreatedRelease || result.Imported != 0 || result.AlreadyPresent != 2 {
+		t.Fatalf("second import result = %+v", result)
+	}
+	var importRecords int
+	if err := database.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sbom_imports").Scan(&importRecords); err != nil {
+		t.Fatal(err)
+	}
+	if importRecords != 2 {
+		t.Fatalf("SBOM import records = %d, want 2", importRecords)
+	}
+
+	badMetadata := metadata
+	badMetadata.DocumentSHA256 = "invalid"
+	if _, err := database.ImportReleaseComponents(ctx, "AG-200", "3.0", components, badMetadata); err == nil {
+		t.Fatal("invalid import metadata error = nil")
+	}
+	if _, err := database.GetRelease(ctx, "AG-200", "3.0"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("failed import created release; GetRelease() error = %v", err)
+	}
+}
+
+func TestSchemaVersionOneMigratesWithoutLosingComponents(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "v1.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statements := []string{
+		`CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE UNIQUE, description TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)`,
+		`CREATE TABLE releases (id INTEGER PRIMARY KEY, product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE, version TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(product_id, version))`,
+		`CREATE TABLE components (id INTEGER PRIMARY KEY, release_id INTEGER NOT NULL REFERENCES releases(id) ON DELETE CASCADE, ecosystem TEXT NOT NULL, name TEXT NOT NULL, version TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(release_id, ecosystem, name, version))`,
+		`CREATE INDEX components_release_id_idx ON components(release_id)`,
+		`INSERT INTO products(id, name, description, created_at) VALUES (1, 'AG-200', '', '2026-09-29T00:00:00Z')`,
+		`INSERT INTO releases(id, product_id, version, created_at) VALUES (1, 1, '2.2', '2026-09-29T00:00:00Z')`,
+		`INSERT INTO components(release_id, ecosystem, name, version, created_at) VALUES (1, 'Alpine', 'openssl', '3.0.8', '2026-09-29T00:00:00Z')`,
+		`PRAGMA user_version = 1`,
+	}
+	for _, statement := range statements {
+		if _, err := raw.ExecContext(ctx, statement); err != nil {
+			raw.Close()
+			t.Fatalf("prepare v1 database: %v", err)
+		}
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	database, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open(v1) error = %v", err)
+	}
+	defer database.Close()
+	components, err := database.ListComponents(ctx, "AG-200", "2.2")
+	if err != nil || len(components) != 1 || components[0].Name != "openssl" || components[0].PURL != "" {
+		t.Fatalf("migrated components = %+v, %v", components, err)
+	}
+	var version int
+	if err := database.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != schemaVersion {
+		t.Fatalf("schema version = %d, want %d", version, schemaVersion)
 	}
 }

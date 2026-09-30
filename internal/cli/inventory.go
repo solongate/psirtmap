@@ -123,6 +123,8 @@ func runRelease(ctx context.Context, args []string, stdout io.Writer, stderr io.
 	switch args[0] {
 	case "add", "create":
 		return runReleaseAdd(ctx, args[1:], stdout, stderr, database)
+	case "import":
+		return runReleaseImport(ctx, args[1:], stdout, stderr, database)
 	case "list", "ls":
 		return runReleaseList(ctx, args[1:], stdout, stderr, database)
 	default:

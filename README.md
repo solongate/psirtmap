@@ -26,8 +26,8 @@ firmware, and embedded-software manufacturers.
 
 > [!IMPORTANT]
 > PSIRTMap is pre-1.0. Inventory data is local, but vulnerability scans
-> currently query the OSV API over the internet. Offline feeds, CycloneDX
-> import, persistent findings, and human assessments are planned—not shipped.
+> currently query the OSV API over the internet. Offline feeds, persistent
+> findings, and human assessments are planned—not shipped.
 
 ## Why PSIRTMap?
 
@@ -47,18 +47,19 @@ is useful evidence; it is not proof that a shipped product is exploitable.
 
 ## What works today
 
-The current release, `v0.0.3`, includes:
+The current release, `v0.0.4`, includes:
 
 - A responsive, keyboard-driven terminal dashboard.
 - Local SQLite inventory for products, releases, and components.
+- Atomic CycloneDX JSON import with package URL normalization and provenance.
 - Guided product, release, and component creation.
 - Live release scanning through OSV package-version queries.
 - Human-readable and deterministic JSON output.
 - Single-binary builds for macOS, Linux, and Windows.
 - No account, database server, or PSIRTMap cloud service.
 
-See the [roadmap](ROADMAP.md) for the ordered path to SBOM import, finding
-history, assessments, CISA KEV enrichment, offline feeds, and VEX.
+See the [roadmap](ROADMAP.md) for the ordered path to local vulnerability data,
+finding history, assessments, CISA KEV enrichment, offline feeds, and VEX.
 
 ## Install
 
@@ -83,8 +84,8 @@ $ psirtmap
 ```
 
 The first run creates `~/.psirtmap/psirtmap.db`. Use `n` to create a product,
-then add a release and its components. Open **Scanner**, select a release, and
-press `s`.
+open **Releases**, and press `i` to import its CycloneDX JSON SBOM. Then open
+**Scanner**, select the release, and press `s`.
 
 | Key | Action |
 |---|---|
@@ -92,6 +93,7 @@ press `s`.
 | `←` / `→` or `h` / `l` | Move between navigation and content |
 | `1`–`5` | Open a section directly |
 | `n` | Create an item in the current section |
+| `i` | Import CycloneDX JSON from **Releases** |
 | `s` or `Enter` | Scan the selected release |
 | `r` | Refresh local inventory |
 | `?` | Show keyboard help |
@@ -111,13 +113,16 @@ The dashboard and CLI operate on the same local database.
 
 ```sh
 psirtmap product add AG-200 --description "Industrial gateway"
-psirtmap release add AG-200 2.2
-
-psirtmap component add AG-200@2.2 openssl@3.0.8 --ecosystem Alpine
-psirtmap component add AG-200@2.2 busybox@1.36.0 --ecosystem Alpine
+psirtmap release import AG-200@2.2 ./firmware-2.2.cdx.json
 
 psirtmap scan AG-200@2.2
 ```
+
+The import accepts CycloneDX JSON 1.2–1.7, walks nested components, derives
+OSV identities from package URLs, records the document hash, and safely merges
+repeated imports. Components without a supported package URL are reported as
+skipped. Manual component entry remains available for demos and corrections.
+An [example device SBOM](examples/ag-200/firmware-2.2.cdx.json) is included.
 
 Query one package without adding it to the inventory:
 
@@ -129,6 +134,7 @@ Use JSON output in scripts:
 
 ```sh
 psirtmap product list --json
+psirtmap release import AG-200@2.2 ./firmware-2.2.cdx.json --json
 psirtmap scan AG-200@2.2 --json
 ```
 
@@ -139,7 +145,7 @@ Run `psirtmap help` or `psirtmap <command> --help` for complete usage.
 ## How it works
 
 ```text
-Product -> Release -> Component -> Vulnerability match -> Human review
+CycloneDX SBOM -> Product release -> Component -> Vulnerability match -> Human review
 ```
 
 For example:
@@ -162,8 +168,9 @@ The explicit data model is:
 PRODUCT -> RELEASE -> COMPONENT -> VULNERABILITY -> FINDING -> ASSESSMENT
 ```
 
-The final three objects are the next product milestone. Today, scan results
-are displayed but are not yet persisted as assessment records.
+The final three objects are the next product milestones. Today, imported
+component identities and SBOM provenance are persisted, while scan results are
+displayed but are not yet stored as assessment records.
 
 ## Local data
 

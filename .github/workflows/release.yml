@@ -48,6 +48,7 @@ jobs:
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
           sqlite_dir="$(go list -m -f '{{.Dir}}' modernc.org/sqlite)"
+          packageurl_dir="$(go list -m -f '{{.Dir}}' github.com/package-url/packageurl-go)"
           mkdir -p build dist
 
           build_archive() {
@@ -66,6 +67,9 @@ jobs:
               -o "build/$package/$binary" .
             cp LICENSE NOTICE README.md ROADMAP.md CHANGELOG.md SECURITY.md "build/$package/"
             cp THIRD_PARTY_NOTICES.md "build/$package/"
+            mkdir -p "build/$package/docs/assets"
+            cp docs/assets/dashboard.svg docs/assets/solongate-psirtmap-logo.png "build/$package/docs/assets/"
+            cp "$packageurl_dir/LICENSE" "build/$package/THIRD_PARTY-packageurl-go-LICENSE"
             cp "$sqlite_dir/LICENSE" "build/$package/THIRD_PARTY-modernc-sqlite-LICENSE"
             cp "$sqlite_dir/LICENSE-SQLITE" "build/$package/THIRD_PARTY-SQLITE-LICENSE"
             cp "$sqlite_dir/LICENSE-3RD-PARTY.md" "build/$package/THIRD_PARTY-LICENSES.md"
