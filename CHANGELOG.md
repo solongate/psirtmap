@@ -6,6 +6,34 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.9] - 2026-10-01
+
+### Added
+
+- `psirtmap feed pull`, `feed export`, and `feed import` for controlled
+  vulnerability-intelligence transfer into disconnected environments.
+- Versioned ZIP bundles containing inventory-scoped OSV matches and the
+  complete CISA KEV catalog.
+- A strict manifest with per-file sizes and SHA-256 checksums, bounded archive
+  extraction, exact file allowlisting, and source-data validation.
+- Persistent bundle source, creation time, import time, source freshness, and
+  manifest digest provenance.
+- Unit, rollback, and end-to-end offline scanning coverage.
+
+### Changed
+
+- Feed import replaces OSV and KEV snapshots in one SQLite transaction; any
+  validation or database failure preserves both last-known-good snapshots.
+- Database schema migrated to version 7 without changing inventory, findings,
+  scan audits, or assessment history.
+- Version advanced to `0.0.9`.
+
+### Security
+
+- Bundle documentation distinguishes corruption-detecting checksums from
+  creator authentication and requires a trusted transfer path until signing is
+  implemented.
+
 ## [0.0.8] - 2026-10-01
 
 ### Added
@@ -165,7 +193,8 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Human-readable and JSON output.
 - Automated tests, cross-platform release builds, and Apache-2.0 licensing.
 
-[Unreleased]: https://github.com/solongate/psirtmap/compare/v0.0.8...HEAD
+[Unreleased]: https://github.com/solongate/psirtmap/compare/v0.0.9...HEAD
+[0.0.9]: https://github.com/solongate/psirtmap/compare/v0.0.8...v0.0.9
 [0.0.8]: https://github.com/solongate/psirtmap/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/solongate/psirtmap/compare/v0.0.6...v0.0.7
 [0.0.6]: https://github.com/solongate/psirtmap/compare/v0.0.5...v0.0.6
