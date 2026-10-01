@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
@@ -384,6 +385,75 @@ func TestDashboardScansSelectedRelease(t *testing.T) {
 	if !strings.Contains(model.View().Content, "NEEDS REVIEW") {
 		t.Fatal("scanner view does not show review status")
 	}
+}
+
+func TestDashboardRecordsAndDisplaysAssessmentHistory(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database := newDashboardTestDatabase(t)
+	if _, err := database.CreateProduct(ctx, "AG-200", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateRelease(ctx, "AG-200", "2.2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ReconcileFindings(ctx, "AG-200", "2.2", []store.FindingMatch{{
+		Ecosystem: "Alpine", Component: "openssl", ComponentVersion: "3.0.8",
+		VulnerabilityID: "CVE-2026-12345",
+	}}, "local-osv-snapshot", time.Now(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateAssessment(ctx, store.AssessmentTarget{
+		Product: "AG-200", Release: "2.2", VulnerabilityID: "CVE-2026-12345",
+	}, store.AssessmentInput{Status: store.AssessmentInvestigating, Reviewer: "initial-reviewer"}); err != nil {
+		t.Fatal(err)
+	}
+	model := newDashboardModel(ctx, database, &dashboardQuerier{})
+	loadDashboard(t, model)
+	model.screen = screenFindings
+	model.focusMenu = false
+
+	model.Update(dashboardKey("a"))
+	if model.form.kind != formAssessment || model.form.target == nil || model.form.target.VulnerabilityID != "CVE-2026-12345" {
+		t.Fatalf("assessment form = %+v", model.form)
+	}
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	assertDashboardFits(t, model.View().Content, 80, 24)
+	model.form.fields[0].input.SetValue("affected")
+	model.form.fields[1].input.SetValue("")
+	model.form.fields[2].input.SetValue("emirhan")
+	invalid := model.saveForm()().(dashboardSavedMsg)
+	if invalid.err == nil || !strings.Contains(invalid.err.Error(), "reason is required") {
+		t.Fatalf("invalid assessment error = %v", invalid.err)
+	}
+	model.Update(invalid)
+	if model.form.kind != formAssessment || model.form.err == nil {
+		t.Fatalf("invalid assessment closed form: %+v", model.form)
+	}
+	values := []string{"not-affected", "Feature disabled", "emirhan", "SEC-123"}
+	for index, value := range values {
+		model.form.fields[index].input.SetValue(value)
+	}
+	message := model.saveForm()().(dashboardSavedMsg)
+	if message.err != nil {
+		t.Fatalf("save assessment error = %v", message.err)
+	}
+	_, refresh := model.Update(message)
+	if refresh == nil {
+		t.Fatal("assessment save did not refresh inventory")
+	}
+	model.Update(refresh())
+	if len(model.data.assessments) != 2 || model.data.findings[0].Status != "not-affected" {
+		t.Fatalf("assessment inventory = %+v, findings = %+v", model.data.assessments, model.data.findings)
+	}
+	content := model.View().Content
+	for _, expected := range []string{"Assessment history: 2", "not-affected", "Latest:", "Earlier:", "emirhan", "initial-reviewer", "Feature disabled", "SEC-123"} {
+		if !strings.Contains(content, expected) {
+			t.Errorf("findings view = %q, want %q", content, expected)
+		}
+	}
+	assertDashboardFits(t, content, 80, 24)
 }
 
 func TestDashboardReportsScanFailure(t *testing.T) {

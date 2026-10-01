@@ -6,6 +6,28 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.7] - 2026-10-01
+
+### Added
+
+- Append-only human assessment history for component-level release findings.
+- `investigating`, `affected`, `not-affected`, and `fixed` review states.
+- Required reasons for final impact decisions, plus reviewer, timestamp, and
+  optional evidence metadata.
+- `psirtmap assess` for recording decisions and `psirtmap assess history` for
+  inspecting the complete audit trail in text or JSON.
+- Assessment status filtering through `psirtmap findings --status`.
+- Finding assessment forms and latest-decision context in the terminal
+  dashboard.
+
+### Changed
+
+- Finding review state and match lifecycle are represented separately, so a
+  no-longer-matched record does not erase its human decision.
+- Database schema migrated to version 5 without changing inventory, local OSV
+  snapshots, finding history, or scan audits.
+- Version advanced to `0.0.7`.
+
 ## [0.0.6] - 2026-09-30
 
 ### Added
@@ -121,7 +143,8 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Human-readable and JSON output.
 - Automated tests, cross-platform release builds, and Apache-2.0 licensing.
 
-[Unreleased]: https://github.com/solongate/psirtmap/compare/v0.0.6...HEAD
+[Unreleased]: https://github.com/solongate/psirtmap/compare/v0.0.7...HEAD
+[0.0.7]: https://github.com/solongate/psirtmap/compare/v0.0.6...v0.0.7
 [0.0.6]: https://github.com/solongate/psirtmap/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/solongate/psirtmap/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/solongate/psirtmap/compare/v0.0.3...v0.0.4

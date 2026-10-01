@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title description">
   <title id="title">PSIRTMap terminal dashboard</title>
-  <desc id="description">A dark terminal interface showing a product-security inventory overview with products, releases, components, findings, and data-source status.</desc>
+  <desc id="description">A dark terminal interface showing a product-security inventory overview with products, releases, components, findings, human assessments, and data-source status.</desc>
   <defs>
     <linearGradient id="shell" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#161b22"/>
@@ -72,7 +72,7 @@
   <text x="868" y="446" class="mono body">CycloneDX import</text>
   <text x="1088" y="446" class="mono mint" font-size="16" font-weight="700">READY</text>
   <circle cx="850" cy="480" r="6" fill="#5eead4"/>
-  <text x="868" y="486" class="mono body">Finding history</text>
+  <text x="868" y="486" class="mono body">Human assessments</text>
   <text x="1088" y="486" class="mono mint" font-size="16" font-weight="700">READY</text>
 
   <text x="382" y="538" class="mono label">SELECT A RELEASE, THEN PRESS S TO SCAN</text>
@@ -84,6 +84,7 @@
   <text x="520" y="642" class="mono body"><tspan class="mint" font-weight="700">i</tspan> import</text>
   <text x="646" y="642" class="mono body"><tspan class="mint" font-weight="700">u</tspan> sync</text>
   <text x="756" y="642" class="mono body"><tspan class="mint" font-weight="700">s</tspan> scan</text>
-  <text x="876" y="642" class="mono body"><tspan class="mint" font-weight="700">?</tspan> help</text>
-  <text x="996" y="642" class="mono body"><tspan class="mint" font-weight="700">q</tspan> quit</text>
+  <text x="856" y="642" class="mono body"><tspan class="mint" font-weight="700">a</tspan> assess</text>
+  <text x="976" y="642" class="mono body"><tspan class="mint" font-weight="700">?</tspan> help</text>
+  <text x="1096" y="642" class="mono body"><tspan class="mint" font-weight="700">q</tspan> quit</text>
 </svg>

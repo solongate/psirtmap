@@ -19,7 +19,15 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 4
+const schemaVersion = 5
+
+const (
+	AssessmentNeedsReview   = "needs-review"
+	AssessmentInvestigating = "investigating"
+	AssessmentAffected      = "affected"
+	AssessmentNotAffected   = "not-affected"
+	AssessmentFixed         = "fixed"
+)
 
 const (
 	maxIdentifierLength  = 1024
@@ -35,6 +43,9 @@ var (
 	// ErrSnapshotNotFound is returned when a package version has not been
 	// synchronized into the local vulnerability snapshot.
 	ErrSnapshotNotFound = errors.New("local vulnerability snapshot not found")
+	// ErrAmbiguousFinding is returned when an assessment target matches more
+	// than one component-level finding.
+	ErrAmbiguousFinding = errors.New("finding reference is ambiguous")
 )
 
 // DB is a SQLite-backed product inventory.
@@ -131,6 +142,7 @@ type FindingMatch struct {
 
 // Finding is a durable potential-impact record for one shipped release.
 type Finding struct {
+	FindingID         int64      `json:"finding_id"`
 	Product           string     `json:"product"`
 	Release           string     `json:"release"`
 	Ecosystem         string     `json:"ecosystem"`
@@ -140,6 +152,7 @@ type Finding struct {
 	Aliases           []string   `json:"aliases"`
 	Summary           string     `json:"summary,omitempty"`
 	Status            string     `json:"status"`
+	MatchStatus       string     `json:"match_status"`
 	Active            bool       `json:"active"`
 	FirstSeenAt       time.Time  `json:"first_seen_at"`
 	LastSeenAt        time.Time  `json:"last_seen_at"`
@@ -151,7 +164,56 @@ type Finding struct {
 type FindingFilter struct {
 	Product         string
 	Release         string
+	Status          string
 	IncludeInactive bool
+}
+
+// AssessmentTarget identifies one component-level finding. Component fields
+// may be omitted when product, release, and vulnerability identify exactly one
+// finding.
+type AssessmentTarget struct {
+	Product          string
+	Release          string
+	VulnerabilityID  string
+	Ecosystem        string
+	Component        string
+	ComponentVersion string
+}
+
+// AssessmentInput contains one human impact decision.
+type AssessmentInput struct {
+	Status   string
+	Reason   string
+	Reviewer string
+	Evidence string
+}
+
+// Assessment is one append-only entry in a finding's human-review history.
+type Assessment struct {
+	AssessmentID     int64     `json:"assessment_id"`
+	FindingID        int64     `json:"finding_id"`
+	Product          string    `json:"product"`
+	Release          string    `json:"release"`
+	Ecosystem        string    `json:"ecosystem"`
+	Component        string    `json:"component"`
+	ComponentVersion string    `json:"component_version"`
+	VulnerabilityID  string    `json:"id"`
+	Status           string    `json:"status"`
+	Reason           string    `json:"reason,omitempty"`
+	Reviewer         string    `json:"reviewer"`
+	Evidence         string    `json:"evidence,omitempty"`
+	AssessedAt       time.Time `json:"assessed_at"`
+}
+
+// AssessmentFilter limits assessment history to a product release,
+// vulnerability, and optional component identity.
+type AssessmentFilter struct {
+	Product          string
+	Release          string
+	VulnerabilityID  string
+	Ecosystem        string
+	Component        string
+	ComponentVersion string
 }
 
 // FindingScanResult summarizes the lifecycle changes committed by a scan.
@@ -389,6 +451,27 @@ func (d *DB) migrate(ctx context.Context) error {
 			`CREATE INDEX findings_release_active_idx ON findings(release_id, active)`,
 			`CREATE INDEX findings_vulnerability_id_idx ON findings(vulnerability_id)`,
 			`PRAGMA user_version = 4`,
+		}
+		for _, statement := range statements {
+			if _, err := transaction.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("apply schema migration: %w", err)
+			}
+		}
+	}
+
+	if currentVersion < 5 {
+		statements := []string{
+			`CREATE TABLE IF NOT EXISTS assessments (
+				id INTEGER PRIMARY KEY,
+				finding_id INTEGER NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+				status TEXT NOT NULL CHECK(status IN ('investigating', 'affected', 'not-affected', 'fixed')),
+				reason TEXT NOT NULL DEFAULT '',
+				reviewer TEXT NOT NULL,
+				evidence TEXT NOT NULL DEFAULT '',
+				assessed_at TEXT NOT NULL
+			)`,
+			`CREATE INDEX IF NOT EXISTS assessments_finding_time_idx ON assessments(finding_id, assessed_at, id)`,
+			`PRAGMA user_version = 5`,
 		}
 		for _, statement := range statements {
 			if _, err := transaction.ExecContext(ctx, statement); err != nil {
@@ -1301,6 +1384,7 @@ func (d *DB) ReconcileFindings(
 func (d *DB) ListFindings(ctx context.Context, filter FindingFilter) ([]Finding, error) {
 	filter.Product = strings.TrimSpace(filter.Product)
 	filter.Release = strings.TrimSpace(filter.Release)
+	filter.Status = strings.TrimSpace(filter.Status)
 	if filter.Release != "" && filter.Product == "" {
 		return nil, errors.New("finding release filter requires a product")
 	}
@@ -1317,8 +1401,14 @@ func (d *DB) ListFindings(ctx context.Context, filter FindingFilter) ([]Finding,
 			return nil, err
 		}
 	}
+	if filter.Status != "" {
+		filter.Status, err = cleanReviewStatus(filter.Status, true)
+		if err != nil {
+			return nil, err
+		}
+	}
 
-	query := `SELECT p.name, r.version, f.ecosystem, f.component_name,
+	query := `SELECT f.id, p.name, r.version, f.ecosystem, f.component_name,
 		f.component_version, f.vulnerability_id, f.aliases_json, f.summary,
 		f.review_status, f.active, f.first_seen_at, f.last_seen_at,
 		f.no_longer_matched_at
@@ -1337,6 +1427,10 @@ func (d *DB) ListFindings(ctx context.Context, filter FindingFilter) ([]Finding,
 	if !filter.IncludeInactive {
 		query += " AND f.active = 1"
 	}
+	if filter.Status != "" {
+		query += " AND f.review_status = ?"
+		args = append(args, filter.Status)
+	}
 	query += ` ORDER BY p.name COLLATE NOCASE, r.version, f.vulnerability_id,
 		f.ecosystem, f.component_name, f.component_version`
 
@@ -1351,7 +1445,7 @@ func (d *DB) ListFindings(ctx context.Context, filter FindingFilter) ([]Finding,
 		var aliasesJSON, reviewStatus, firstSeenAt, lastSeenAt, noLongerMatchedAt string
 		var active int
 		if err := rows.Scan(
-			&finding.Product, &finding.Release, &finding.Ecosystem, &finding.Component,
+			&finding.FindingID, &finding.Product, &finding.Release, &finding.Ecosystem, &finding.Component,
 			&finding.ComponentVersion, &finding.VulnerabilityID, &aliasesJSON,
 			&finding.Summary, &reviewStatus, &active, &firstSeenAt, &lastSeenAt,
 			&noLongerMatchedAt,
@@ -1364,8 +1458,9 @@ func (d *DB) ListFindings(ctx context.Context, filter FindingFilter) ([]Finding,
 		finding.Aliases = nonNilStrings(finding.Aliases)
 		finding.Active = active == 1
 		finding.Status = reviewStatus
+		finding.MatchStatus = "matched"
 		if !finding.Active {
-			finding.Status = "no-longer-matched"
+			finding.MatchStatus = "no-longer-matched"
 		}
 		finding.FirstSeenAt, err = parseTime(firstSeenAt)
 		if err != nil {
@@ -1388,6 +1483,315 @@ func (d *DB) ListFindings(ctx context.Context, filter FindingFilter) ([]Finding,
 		return nil, fmt.Errorf("list findings: %w", err)
 	}
 	return findings, nil
+}
+
+// CreateAssessment appends one human-review decision and updates the
+// finding's current review status in the same transaction.
+func (d *DB) CreateAssessment(
+	ctx context.Context,
+	target AssessmentTarget,
+	input AssessmentInput,
+) (Assessment, error) {
+	var err error
+	target, err = cleanAssessmentTarget(target)
+	if err != nil {
+		return Assessment{}, err
+	}
+	input.Status, err = cleanReviewStatus(input.Status, false)
+	if err != nil {
+		return Assessment{}, err
+	}
+	input.Reviewer, err = cleanIdentifier("assessment reviewer", input.Reviewer)
+	if err != nil {
+		return Assessment{}, err
+	}
+	input.Reason, err = cleanNarrative("assessment reason", input.Reason)
+	if err != nil {
+		return Assessment{}, err
+	}
+	input.Evidence, err = cleanNarrative("assessment evidence", input.Evidence)
+	if err != nil {
+		return Assessment{}, err
+	}
+	if input.Status != AssessmentInvestigating && input.Reason == "" {
+		return Assessment{}, fmt.Errorf("assessment reason is required for status %q", input.Status)
+	}
+
+	transaction, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Assessment{}, fmt.Errorf("begin assessment: %w", err)
+	}
+	defer transaction.Rollback()
+
+	query := `SELECT f.id, p.name, r.version, f.ecosystem, f.component_name,
+		f.component_version, f.vulnerability_id, f.aliases_json
+		FROM findings f
+		JOIN releases r ON r.id = f.release_id
+		JOIN products p ON p.id = r.product_id
+		WHERE p.name = ? COLLATE NOCASE AND r.version = ?`
+	args := []any{target.Product, target.Release}
+	if target.Component != "" {
+		query += " AND f.ecosystem = ? AND f.component_name = ? AND f.component_version = ?"
+		args = append(args, target.Ecosystem, target.Component, target.ComponentVersion)
+	}
+	query += " ORDER BY f.ecosystem, f.component_name, f.component_version"
+
+	rows, err := transaction.QueryContext(ctx, query, args...)
+	if err != nil {
+		return Assessment{}, fmt.Errorf("find assessment target: %w", err)
+	}
+	matches := make([]Assessment, 0, 2)
+	for rows.Next() {
+		var assessment Assessment
+		var aliasesJSON string
+		if err := rows.Scan(
+			&assessment.FindingID, &assessment.Product, &assessment.Release,
+			&assessment.Ecosystem, &assessment.Component, &assessment.ComponentVersion,
+			&assessment.VulnerabilityID, &aliasesJSON,
+		); err != nil {
+			rows.Close()
+			return Assessment{}, fmt.Errorf("read assessment target: %w", err)
+		}
+		matched, matchErr := vulnerabilityIdentifierMatches(
+			assessment.VulnerabilityID, aliasesJSON, target.VulnerabilityID,
+		)
+		if matchErr != nil {
+			rows.Close()
+			return Assessment{}, matchErr
+		}
+		if !matched {
+			continue
+		}
+		matches = append(matches, assessment)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return Assessment{}, fmt.Errorf("read assessment target: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return Assessment{}, fmt.Errorf("close assessment target: %w", err)
+	}
+	if len(matches) == 0 {
+		return Assessment{}, fmt.Errorf("finding %s in %s@%s: %w",
+			target.VulnerabilityID, target.Product, target.Release, ErrNotFound)
+	}
+	if len(matches) > 1 {
+		return Assessment{}, fmt.Errorf(
+			"finding %s in %s@%s matches multiple components; specify a component: %w",
+			target.VulnerabilityID, target.Product, target.Release, ErrAmbiguousFinding,
+		)
+	}
+
+	assessment := matches[0]
+	assessment.Status = input.Status
+	assessment.Reason = input.Reason
+	assessment.Reviewer = input.Reviewer
+	assessment.Evidence = input.Evidence
+	assessment.AssessedAt = time.Now().UTC().Truncate(time.Second)
+	insert, err := transaction.ExecContext(ctx, `INSERT INTO assessments(
+		finding_id, status, reason, reviewer, evidence, assessed_at
+	) VALUES (?, ?, ?, ?, ?, ?)`, assessment.FindingID, assessment.Status,
+		assessment.Reason, assessment.Reviewer, assessment.Evidence,
+		formatTime(assessment.AssessedAt))
+	if err != nil {
+		return Assessment{}, fmt.Errorf("record assessment: %w", err)
+	}
+	assessment.AssessmentID, err = insert.LastInsertId()
+	if err != nil {
+		return Assessment{}, fmt.Errorf("read assessment ID: %w", err)
+	}
+	if _, err := transaction.ExecContext(ctx,
+		"UPDATE findings SET review_status = ? WHERE id = ?",
+		assessment.Status, assessment.FindingID,
+	); err != nil {
+		return Assessment{}, fmt.Errorf("update finding review status: %w", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return Assessment{}, fmt.Errorf("commit assessment: %w", err)
+	}
+	return assessment, nil
+}
+
+// ListAssessments returns append-only human-review history, newest first.
+func (d *DB) ListAssessments(ctx context.Context, filter AssessmentFilter) ([]Assessment, error) {
+	var err error
+	filter.Product = strings.TrimSpace(filter.Product)
+	filter.Release = strings.TrimSpace(filter.Release)
+	filter.VulnerabilityID = strings.TrimSpace(filter.VulnerabilityID)
+	filter.Ecosystem = strings.TrimSpace(filter.Ecosystem)
+	filter.Component = strings.TrimSpace(filter.Component)
+	filter.ComponentVersion = strings.TrimSpace(filter.ComponentVersion)
+	if filter.Release != "" && filter.Product == "" {
+		return nil, errors.New("assessment release filter requires a product")
+	}
+	if filter.VulnerabilityID != "" && filter.Release == "" {
+		return nil, errors.New("assessment vulnerability filter requires a product release")
+	}
+	componentFields := 0
+	for _, value := range []string{filter.Ecosystem, filter.Component, filter.ComponentVersion} {
+		if value != "" {
+			componentFields++
+		}
+	}
+	if componentFields != 0 && componentFields != 3 {
+		return nil, errors.New("assessment component filter requires ecosystem, name, and version")
+	}
+	for _, target := range []struct {
+		label string
+		value *string
+	}{
+		{label: "product name", value: &filter.Product},
+		{label: "release version", value: &filter.Release},
+		{label: "finding vulnerability ID", value: &filter.VulnerabilityID},
+		{label: "finding ecosystem", value: &filter.Ecosystem},
+		{label: "finding component", value: &filter.Component},
+		{label: "finding component version", value: &filter.ComponentVersion},
+	} {
+		if *target.value == "" {
+			continue
+		}
+		*target.value, err = cleanIdentifier(target.label, *target.value)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	query := `SELECT a.id, f.id, p.name, r.version, f.ecosystem,
+		f.component_name, f.component_version, f.vulnerability_id, f.aliases_json,
+		a.status, a.reason, a.reviewer, a.evidence, a.assessed_at
+		FROM assessments a
+		JOIN findings f ON f.id = a.finding_id
+		JOIN releases r ON r.id = f.release_id
+		JOIN products p ON p.id = r.product_id WHERE 1 = 1`
+	args := make([]any, 0, 6)
+	if filter.Product != "" {
+		query += " AND p.name = ? COLLATE NOCASE"
+		args = append(args, filter.Product)
+	}
+	if filter.Release != "" {
+		query += " AND r.version = ?"
+		args = append(args, filter.Release)
+	}
+	if filter.Component != "" {
+		query += " AND f.ecosystem = ? AND f.component_name = ? AND f.component_version = ?"
+		args = append(args, filter.Ecosystem, filter.Component, filter.ComponentVersion)
+	}
+	query += " ORDER BY a.assessed_at DESC, a.id DESC"
+
+	rows, err := d.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list assessments: %w", err)
+	}
+	defer rows.Close()
+	assessments := make([]Assessment, 0)
+	for rows.Next() {
+		var assessment Assessment
+		var aliasesJSON, assessedAt string
+		if err := rows.Scan(
+			&assessment.AssessmentID, &assessment.FindingID, &assessment.Product,
+			&assessment.Release, &assessment.Ecosystem, &assessment.Component,
+			&assessment.ComponentVersion, &assessment.VulnerabilityID,
+			&aliasesJSON, &assessment.Status, &assessment.Reason, &assessment.Reviewer,
+			&assessment.Evidence, &assessedAt,
+		); err != nil {
+			return nil, fmt.Errorf("read assessment: %w", err)
+		}
+		if filter.VulnerabilityID != "" {
+			matched, matchErr := vulnerabilityIdentifierMatches(
+				assessment.VulnerabilityID, aliasesJSON, filter.VulnerabilityID,
+			)
+			if matchErr != nil {
+				return nil, matchErr
+			}
+			if !matched {
+				continue
+			}
+		}
+		assessment.AssessedAt, err = parseTime(assessedAt)
+		if err != nil {
+			return nil, err
+		}
+		assessments = append(assessments, assessment)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list assessments: %w", err)
+	}
+	return assessments, nil
+}
+
+func vulnerabilityIdentifierMatches(primary, aliasesJSON, requested string) (bool, error) {
+	if strings.EqualFold(primary, requested) {
+		return true, nil
+	}
+	var aliases []string
+	if err := json.Unmarshal([]byte(aliasesJSON), &aliases); err != nil {
+		return false, fmt.Errorf("decode finding aliases for %s: %w", primary, err)
+	}
+	for _, alias := range aliases {
+		if strings.EqualFold(alias, requested) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func cleanAssessmentTarget(target AssessmentTarget) (AssessmentTarget, error) {
+	var err error
+	for _, field := range []struct {
+		label string
+		value *string
+	}{
+		{label: "product name", value: &target.Product},
+		{label: "release version", value: &target.Release},
+		{label: "finding vulnerability ID", value: &target.VulnerabilityID},
+	} {
+		*field.value, err = cleanIdentifier(field.label, *field.value)
+		if err != nil {
+			return AssessmentTarget{}, err
+		}
+	}
+	componentFields := 0
+	for _, value := range []string{target.Ecosystem, target.Component, target.ComponentVersion} {
+		if strings.TrimSpace(value) != "" {
+			componentFields++
+		}
+	}
+	if componentFields != 0 && componentFields != 3 {
+		return AssessmentTarget{}, errors.New("assessment component target requires ecosystem, name, and version")
+	}
+	if componentFields == 3 {
+		for _, field := range []struct {
+			label string
+			value *string
+		}{
+			{label: "finding ecosystem", value: &target.Ecosystem},
+			{label: "finding component", value: &target.Component},
+			{label: "finding component version", value: &target.ComponentVersion},
+		} {
+			*field.value, err = cleanIdentifier(field.label, *field.value)
+			if err != nil {
+				return AssessmentTarget{}, err
+			}
+		}
+	}
+	return target, nil
+}
+
+func cleanReviewStatus(value string, allowNeedsReview bool) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	valid := value == AssessmentInvestigating || value == AssessmentAffected ||
+		value == AssessmentNotAffected || value == AssessmentFixed
+	if allowNeedsReview && value == AssessmentNeedsReview {
+		valid = true
+	}
+	if !valid {
+		allowed := "investigating, affected, not-affected, fixed"
+		if allowNeedsReview {
+			allowed = "needs-review, " + allowed
+		}
+		return "", fmt.Errorf("invalid assessment status %q; expected one of: %s", value, allowed)
+	}
+	return value, nil
 }
 
 func nonNilStrings(values []string) []string {
@@ -1537,17 +1941,21 @@ func cleanImportText(label, value string) (string, error) {
 }
 
 func cleanDescription(value string) (string, error) {
+	return cleanNarrative("product description", value)
+}
+
+func cleanNarrative(label, value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if !utf8.ValidString(value) {
-		return "", errors.New("product description must be valid UTF-8")
+		return "", fmt.Errorf("%s must be valid UTF-8", label)
 	}
 	if utf8.RuneCountInString(value) > maxDescriptionLength {
-		return "", fmt.Errorf("product description exceeds %d characters", maxDescriptionLength)
+		return "", fmt.Errorf("%s exceeds %d characters", label, maxDescriptionLength)
 	}
 	if strings.IndexFunc(value, func(character rune) bool {
 		return unicode.IsControl(character) && character != '\n' && character != '\r' && character != '\t'
 	}) >= 0 {
-		return "", errors.New("product description contains an unsupported control character")
+		return "", fmt.Errorf("%s contains an unsupported control character", label)
 	}
 	return value, nil
 }

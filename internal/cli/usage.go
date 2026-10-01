@@ -22,6 +22,7 @@ Inventory commands:
   sync        Update the local OSV snapshot for inventory packages
   scan        Match a release against the local OSV snapshot
   findings    List durable potential-impact findings
+  assess      Record and inspect human impact decisions
 
 Other commands:
   check       Query OSV for one package version
@@ -119,11 +120,33 @@ func printFindingsUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `List findings saved by local release scans.
 
 Usage:
-  psirtmap findings [product@release] [--all] [--json]
+  psirtmap findings [product@release] [--status <status>] [--all] [--json]
 
 By default only active matches are shown. Use --all to include findings that no
 longer match the current local OSV snapshot. Live scans are diagnostic and are
 never written to the finding history.`)
+}
+
+func printAssessUsage(writer io.Writer) {
+	fmt.Fprintln(writer, `Record and inspect human impact decisions for a finding.
+
+Usage:
+  psirtmap assess <product>@<release> <vulnerability-id> \
+    --status <status> --reviewer <name> [--reason <text>] \
+    [--evidence <reference>] [--component <ecosystem:package@version>] [--json]
+
+  psirtmap assess history <product>@<release> <vulnerability-id> \
+    [--component <ecosystem:package@version>] [--json]
+
+Statuses:
+  investigating  Review is still in progress; a reason is optional.
+  affected       The shipped release is affected; a reason is required.
+  not-affected   The match is not exploitable in this release; a reason is required.
+  fixed          The impact is remediated; a reason is required.
+
+If the vulnerability matches multiple components in the same release, use
+--component to select the exact component-level finding. Every decision is
+appended to local history; earlier assessments are never overwritten.`)
 }
 
 func printDashboardUsage(writer io.Writer) {
