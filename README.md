@@ -25,9 +25,10 @@ firmware, and embedded-software manufacturers.
 ![PSIRTMap terminal dashboard](docs/assets/dashboard.svg)
 
 > [!IMPORTANT]
-> PSIRTMap is pre-1.0. Normal release scans use a local OSV snapshot and do not
-> require internet access after `psirtmap sync`. Creating transferable feed
-> bundles for fully isolated environments is planned—not shipped.
+> PSIRTMap is pre-1.0. Normal release scans use local OSV and CISA KEV
+> snapshots and do not require internet access after `psirtmap sync`.
+> Transferable feed bundles for machines that never connect to the internet
+> are planned—not shipped.
 
 ## Why PSIRTMap?
 
@@ -47,13 +48,15 @@ is useful evidence; it is not proof that a shipped product is exploitable.
 
 ## What works today
 
-The current release, `v0.0.7`, includes:
+The current release, `v0.0.8`, includes:
 
 - A responsive, keyboard-driven terminal dashboard.
 - Local SQLite inventory for products, releases, and components.
 - Atomic CycloneDX JSON import with package URL normalization and provenance.
 - Guided product, release, and component creation.
 - Atomic OSV synchronization for the package versions in the local inventory.
+- Local CISA Known Exploited Vulnerabilities (KEV) synchronization and
+  alias-aware finding enrichment.
 - Local release scanning with source and snapshot freshness metadata.
 - Durable findings with new, existing, reopened, and no-longer-matched states.
 - A release-filterable `findings` command and dashboard view.
@@ -65,8 +68,8 @@ The current release, `v0.0.7`, includes:
 - Single-binary builds for macOS, Linux, and Windows.
 - No account, database server, or PSIRTMap cloud service.
 
-See the [roadmap](ROADMAP.md) for the ordered path to CISA KEV enrichment,
-offline feeds, and VEX.
+See the [roadmap](ROADMAP.md) for the ordered path to transferable offline
+feeds and VEX.
 
 ## Install
 
@@ -92,7 +95,7 @@ $ psirtmap
 
 The first run creates `~/.psirtmap/psirtmap.db`. Use `n` to create a product,
 open **Releases**, and press `i` to import its CycloneDX JSON SBOM. Press `u`
-once to update the local OSV snapshot, then open **Scanner** and press `s`.
+once to update the local OSV and CISA KEV data, then open **Scanner** and press `s`.
 Open **Findings**, select a match, and press `a` to record the human decision.
 
 | Key | Action |
@@ -103,7 +106,7 @@ Open **Findings**, select a match, and press `a` to record the human decision.
 | `n` | Create an item in the current section |
 | `i` | Import CycloneDX JSON from **Releases** |
 | `a` or `Enter` | Assess the selected finding from **Findings** |
-| `u` | Update the local OSV snapshot; this step uses the internet |
+| `u` | Update local OSV and CISA KEV data; this step uses the internet |
 | `s` or `Enter` | Scan the selected release |
 | `r` | Refresh local inventory |
 | `?` | Show keyboard help |
@@ -173,7 +176,8 @@ Run `psirtmap help` or `psirtmap <command> --help` for complete usage.
 ```text
 CycloneDX SBOM -> Product release -> Component inventory
                                          |
-OSV API -------- psirtmap sync --------> local OSV snapshot
+OSV API --------- psirtmap sync -------> local OSV snapshot
+CISA KEV catalog -/             \------> local KEV snapshot
                                          |
                               offline release scan -> durable finding -> human assessment
 ```
@@ -192,13 +196,18 @@ AG-200
 During `sync`, PSIRTMap sends each distinct component ecosystem, package name,
 and version to OSV. It stores the matching advisory metadata, aliases,
 severity, affected ranges, retrieval time, and exact package-version match in
-SQLite. Product names, release names, descriptions, and complete SBOM files
-are not sent.
+SQLite. It also downloads [CISA's complete public KEV catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog)
+and stores the catalog version, freshness, CVE metadata, required action, due
+date, and ransomware-use signal. Product names, release names, descriptions,
+and complete SBOM files are not sent to either source.
 
-Normal `scan` commands read that saved snapshot and make no OSV request. A new
-or changed component needs another successful `sync`; if any OSV query fails,
-the previous complete snapshot stays active. `check`, `sync`, and
-`scan --live` are the operations that require internet access.
+Normal `scan` commands read those saved snapshots and make no remote request.
+A finding is marked as known exploited when its OSV identifier or one of its
+aliases matches a KEV CVE. KEV is a prioritization signal; it does not prove
+that a particular product configuration is exploitable. A new or changed
+component needs another successful `sync`; a failed source update preserves
+the last known-good local data. `check`, `sync`, and `scan --live` are the
+operations that require internet access.
 
 Every successful normal scan reconciles its matches with the release's saved
 finding history. A first match is `new`, a repeated match is `existing`, a
@@ -218,15 +227,15 @@ The explicit data model is:
 PRODUCT -> RELEASE -> COMPONENT -> VULNERABILITY -> FINDING -> ASSESSMENT
 ```
 
-Vulnerability records, findings, and assessment history all live locally.
-CISA KEV enrichment is the next product milestone.
+Vulnerability records, KEV metadata, findings, and assessment history all
+live locally.
 
 ## Local data
 
 The default database is `~/.psirtmap/psirtmap.db`. PSIRTMap creates it with
 permissions `0600` and applies compatible schema migrations automatically. It
-contains shipped-product inventory, the active OSV snapshot, scan audit
-records, durable finding history, and append-only human assessments.
+contains shipped-product inventory, the active OSV and CISA KEV snapshots,
+scan audit records, durable finding history, and append-only human assessments.
 
 Choose another database with either:
 

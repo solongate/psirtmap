@@ -19,8 +19,8 @@ Inventory commands:
   product     Add and list products
   release     Add, import, and list product releases
   component   Add and list release components
-  sync        Update the local OSV snapshot for inventory packages
-  scan        Match a release against the local OSV snapshot
+  sync        Update local OSV and CISA KEV vulnerability intelligence
+  scan        Match a release and prioritize findings with local KEV data
   findings    List durable potential-impact findings
   assess      Record and inspect human impact decisions
 
@@ -99,21 +99,24 @@ Usage:
 
   psirtmap scan <product>@<release> [--live] [--json]
 
-The default scan uses the local snapshot created by "psirtmap sync" and does
-not require internet access. Use --live to query OSV directly without changing
-the saved snapshot.
+The default scan uses the local OSV and CISA KEV snapshots created by
+"psirtmap sync" and does not require internet access. Use --live to query OSV
+directly without changing the saved OSV snapshot; KEV enrichment remains local.
 
-A match means potentially affected and requires human review.`)
+A match means potentially affected and requires human review. A KEV match is a
+prioritization signal, not proof that the product is exploitable.`)
 }
 
 func printSyncUsage(writer io.Writer) {
-	fmt.Fprintln(writer, `Update the local OSV snapshot for every distinct package version in the inventory.
+	fmt.Fprintln(writer, `Update local vulnerability intelligence.
 
 Usage:
   psirtmap [--database <path>] sync [--json]
 
-Sync requires internet access. All OSV queries must succeed before the new
-snapshot is committed, so a failed update leaves the previous snapshot intact.`)
+Sync queries OSV for every distinct package version and downloads the CISA
+Known Exploited Vulnerabilities catalog. It requires internet access. Downloads
+and validation complete before new source snapshots are committed; malformed or
+failed updates leave the previous local data available.`)
 }
 
 func printFindingsUsage(writer io.Writer) {
@@ -124,7 +127,8 @@ Usage:
 
 By default only active matches are shown. Use --all to include findings that no
 longer match the current local OSV snapshot. Live scans are diagnostic and are
-never written to the finding history.`)
+never written to the finding history. The KEV column is prioritization context,
+not proof that a shipped product is exploitable.`)
 }
 
 func printAssessUsage(writer io.Writer) {

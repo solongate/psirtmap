@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title description">
   <title id="title">PSIRTMap terminal dashboard</title>
-  <desc id="description">A dark terminal interface showing a product-security inventory overview with products, releases, components, findings, human assessments, and data-source status.</desc>
+  <desc id="description">A dark terminal interface showing a product-security inventory overview with products, releases, components, findings, human assessments, and local OSV and CISA KEV status.</desc>
   <defs>
     <linearGradient id="shell" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#161b22"/>
@@ -62,18 +62,24 @@
   <text x="932" y="339" class="mono label">COMPONENTS</text>
 
   <text x="382" y="403" class="mono strong">Data sources</text>
-  <circle cx="392" cy="440" r="6" fill="#5eead4"/>
-  <text x="410" y="446" class="mono body">Local inventory</text>
-  <text x="688" y="446" class="mono mint" font-size="16" font-weight="700">READY</text>
-  <circle cx="392" cy="480" r="6" fill="#5eead4"/>
-  <text x="410" y="486" class="mono body">Local OSV snapshot</text>
-  <text x="688" y="486" class="mono mint" font-size="16" font-weight="700">READY</text>
-  <circle cx="850" cy="440" r="6" fill="#5eead4"/>
-  <text x="868" y="446" class="mono body">CycloneDX import</text>
-  <text x="1088" y="446" class="mono mint" font-size="16" font-weight="700">READY</text>
-  <circle cx="850" cy="480" r="6" fill="#5eead4"/>
-  <text x="868" y="486" class="mono body">Human assessments</text>
-  <text x="1088" y="486" class="mono mint" font-size="16" font-weight="700">READY</text>
+  <circle cx="392" cy="430" r="6" fill="#5eead4"/>
+  <text x="410" y="436" class="mono body">Local inventory</text>
+  <text x="688" y="436" class="mono mint" font-size="16" font-weight="700">READY</text>
+  <circle cx="392" cy="466" r="6" fill="#5eead4"/>
+  <text x="410" y="472" class="mono body">Local OSV snapshot</text>
+  <text x="688" y="472" class="mono mint" font-size="16" font-weight="700">READY</text>
+  <circle cx="392" cy="502" r="6" fill="#5eead4"/>
+  <text x="410" y="508" class="mono body">CISA KEV catalog</text>
+  <text x="688" y="508" class="mono amber" font-size="16" font-weight="700">1 MATCH</text>
+  <circle cx="850" cy="430" r="6" fill="#5eead4"/>
+  <text x="868" y="436" class="mono body">CycloneDX import</text>
+  <text x="1088" y="436" class="mono mint" font-size="16" font-weight="700">READY</text>
+  <circle cx="850" cy="466" r="6" fill="#5eead4"/>
+  <text x="868" y="472" class="mono body">Durable findings</text>
+  <text x="1088" y="472" class="mono mint" font-size="16" font-weight="700">READY</text>
+  <circle cx="850" cy="502" r="6" fill="#5eead4"/>
+  <text x="868" y="508" class="mono body">Human assessments</text>
+  <text x="1088" y="508" class="mono mint" font-size="16" font-weight="700">READY</text>
 
   <text x="382" y="538" class="mono label">SELECT A RELEASE, THEN PRESS S TO SCAN</text>
 

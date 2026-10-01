@@ -8,6 +8,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/solongate/psirtmap/internal/kev"
 	"github.com/solongate/psirtmap/internal/osv"
 	"github.com/solongate/psirtmap/internal/store"
 )
@@ -24,6 +25,11 @@ type syncQueryResult struct {
 	err             error
 }
 
+type intelligenceSyncResult struct {
+	OSV     store.VulnerabilitySync `json:"osv"`
+	CISAKEV *store.KEVSync          `json:"cisa_kev,omitempty"`
+}
+
 func runSync(
 	ctx context.Context,
 	args []string,
@@ -31,6 +37,7 @@ func runSync(
 	stderr io.Writer,
 	database *store.DB,
 	querier VulnerabilityQuerier,
+	kevFetcher KEVFetcher,
 ) int {
 	positional, jsonOutput, help, err := parseJSONPositionals(args)
 	if err != nil {
@@ -54,11 +61,7 @@ func runSync(
 	if len(packages) == 0 {
 		return commandError(stderr, errors.New("no components to synchronize; import an SBOM or add a component first"))
 	}
-	snapshots, err := queryPackageSnapshots(ctx, packages, querier)
-	if err != nil {
-		return commandError(stderr, err)
-	}
-	result, err := database.SaveOSVSnapshot(ctx, snapshots)
+	result, err := synchronizeIntelligence(ctx, database, packages, querier, kevFetcher)
 	if err != nil {
 		return commandError(stderr, err)
 	}
@@ -68,10 +71,53 @@ func runSync(
 	}
 	fmt.Fprintln(stdout, "VULNERABILITY DATA UPDATED")
 	fmt.Fprintln(stdout, "OSV              ready")
-	fmt.Fprintf(stdout, "Packages         %d\n", result.Packages)
-	fmt.Fprintf(stdout, "Vulnerabilities  %d\n", result.Vulnerabilities)
-	fmt.Fprintf(stdout, "Synchronized     %s\n", result.SynchronizedAt.Format("2006-01-02 15:04:05 UTC"))
+	if result.CISAKEV != nil {
+		fmt.Fprintln(stdout, "CISA KEV         ready")
+	}
+	fmt.Fprintf(stdout, "Packages         %d\n", result.OSV.Packages)
+	fmt.Fprintf(stdout, "Vulnerabilities  %d\n", result.OSV.Vulnerabilities)
+	if result.CISAKEV != nil {
+		fmt.Fprintf(stdout, "KEV entries      %d\n", result.CISAKEV.Entries)
+		fmt.Fprintf(stdout, "KEV released     %s\n", result.CISAKEV.DateReleased.Format("2006-01-02 15:04:05 UTC"))
+	}
+	fmt.Fprintf(stdout, "Synchronized     %s\n", result.OSV.SynchronizedAt.Format("2006-01-02 15:04:05 UTC"))
 	return 0
+}
+
+func synchronizeIntelligence(
+	ctx context.Context,
+	database *store.DB,
+	packages []store.PackageVersion,
+	querier VulnerabilityQuerier,
+	kevFetcher KEVFetcher,
+) (intelligenceSyncResult, error) {
+	snapshots, err := queryPackageSnapshots(ctx, packages, querier)
+	if err != nil {
+		return intelligenceSyncResult{}, err
+	}
+	var catalog kev.Catalog
+	var kevCatalogFetched bool
+	var catalogResult *store.KEVSync
+	if kevFetcher != nil {
+		catalog, err = kevFetcher.Fetch(ctx)
+		if err != nil {
+			return intelligenceSyncResult{}, err
+		}
+		kevCatalogFetched = true
+	}
+	osvResult, err := database.SaveOSVSnapshot(ctx, snapshots)
+	if err != nil {
+		return intelligenceSyncResult{}, err
+	}
+	if kevCatalogFetched {
+		kevResult, saveErr := database.SaveKEVCatalog(ctx, catalog)
+		err = saveErr
+		if err != nil {
+			return intelligenceSyncResult{}, err
+		}
+		catalogResult = &kevResult
+	}
+	return intelligenceSyncResult{OSV: osvResult, CISAKEV: catalogResult}, nil
 }
 
 func queryPackageSnapshots(

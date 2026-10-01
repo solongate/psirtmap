@@ -11,6 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/solongate/psirtmap/internal/kev"
 	"github.com/solongate/psirtmap/internal/osv"
 	"github.com/solongate/psirtmap/internal/store"
 )
@@ -24,6 +25,17 @@ type dashboardQuerier struct {
 func (q *dashboardQuerier) Query(_ context.Context, _ osv.Package, _ string) ([]osv.Vulnerability, error) {
 	q.calls++
 	return q.result, q.err
+}
+
+type dashboardKEVFetcher struct {
+	catalog kev.Catalog
+	err     error
+	calls   int
+}
+
+func (f *dashboardKEVFetcher) Fetch(_ context.Context) (kev.Catalog, error) {
+	f.calls++
+	return f.catalog, f.err
 }
 
 func newDashboardTestDatabase(t *testing.T) *store.DB {
@@ -72,7 +84,7 @@ func TestDashboardLoadsAndRendersRealInventory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	model := newDashboardModel(ctx, database, &dashboardQuerier{})
+	model := newDashboardModel(ctx, database, &dashboardQuerier{}, nil)
 	loadDashboard(t, model)
 	if len(model.data.products) != 1 || len(model.data.releases) != 1 || len(model.data.components) != 1 {
 		t.Fatalf("inventory = %+v", model.data)
@@ -93,7 +105,7 @@ func TestDashboardLoadsAndRendersRealInventory(t *testing.T) {
 func TestDashboardNavigationAndResponsiveLayout(t *testing.T) {
 	t.Parallel()
 
-	model := newDashboardModel(context.Background(), newDashboardTestDatabase(t), &dashboardQuerier{})
+	model := newDashboardModel(context.Background(), newDashboardTestDatabase(t), &dashboardQuerier{}, nil)
 	loadDashboard(t, model)
 	model.Update(dashboardKey("3"))
 	if model.screen != screenReleases || model.focusMenu {
@@ -118,7 +130,7 @@ func TestDashboardCreatesProductFromForm(t *testing.T) {
 
 	ctx := context.Background()
 	database := newDashboardTestDatabase(t)
-	model := newDashboardModel(ctx, database, &dashboardQuerier{})
+	model := newDashboardModel(ctx, database, &dashboardQuerier{}, nil)
 	loadDashboard(t, model)
 	model.screen = screenProducts
 	model.openCreateForm()
@@ -154,7 +166,7 @@ func TestDashboardCreatesReleaseAndComponentFromGuidedDefaults(t *testing.T) {
 	if _, err := database.CreateProduct(ctx, "AG-200", ""); err != nil {
 		t.Fatal(err)
 	}
-	model := newDashboardModel(ctx, database, &dashboardQuerier{})
+	model := newDashboardModel(ctx, database, &dashboardQuerier{}, nil)
 	loadDashboard(t, model)
 
 	model.screen = screenReleases
@@ -198,7 +210,7 @@ func TestDashboardImportsCycloneDXFromReleaseScreen(t *testing.T) {
 	if _, err := database.CreateProduct(ctx, "AG-200", ""); err != nil {
 		t.Fatal(err)
 	}
-	model := newDashboardModel(ctx, database, &dashboardQuerier{})
+	model := newDashboardModel(ctx, database, &dashboardQuerier{}, nil)
 	loadDashboard(t, model)
 	model.screen = screenReleases
 	model.openImportForm()
@@ -225,7 +237,7 @@ func TestDashboardImportsCycloneDXFromReleaseScreen(t *testing.T) {
 func TestDashboardFormKeepsValidationError(t *testing.T) {
 	t.Parallel()
 
-	model := newDashboardModel(context.Background(), newDashboardTestDatabase(t), &dashboardQuerier{})
+	model := newDashboardModel(context.Background(), newDashboardTestDatabase(t), &dashboardQuerier{}, nil)
 	loadDashboard(t, model)
 	model.screen = screenProducts
 	model.openCreateForm()
@@ -247,7 +259,7 @@ func TestDashboardComponentFormUsesSelectedReleaseDefaultsAndFits(t *testing.T) 
 	if _, err := database.CreateRelease(ctx, "AG-200", "2.2"); err != nil {
 		t.Fatal(err)
 	}
-	model := newDashboardModel(ctx, database, &dashboardQuerier{})
+	model := newDashboardModel(ctx, database, &dashboardQuerier{}, nil)
 	loadDashboard(t, model)
 	model.screen = screenComponents
 	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -275,7 +287,7 @@ func TestDashboardRendersEverySectionWithInventory(t *testing.T) {
 	if _, err := database.CreateComponent(ctx, "AG-200", "2.2", "Alpine", "openssl", "3.0.8"); err != nil {
 		t.Fatal(err)
 	}
-	model := newDashboardModel(ctx, database, &dashboardQuerier{})
+	model := newDashboardModel(ctx, database, &dashboardQuerier{}, nil)
 	loadDashboard(t, model)
 	model.focusMenu = false
 
@@ -303,7 +315,7 @@ func TestDashboardRendersEverySectionWithInventory(t *testing.T) {
 func TestDashboardHelpCancelRefreshAndEmptyScanKeys(t *testing.T) {
 	t.Parallel()
 
-	model := newDashboardModel(context.Background(), newDashboardTestDatabase(t), &dashboardQuerier{})
+	model := newDashboardModel(context.Background(), newDashboardTestDatabase(t), &dashboardQuerier{}, nil)
 	loadDashboard(t, model)
 	model.Update(dashboardKey("?"))
 	if !model.showHelp || !strings.Contains(model.View().Content, "Keyboard help") {
@@ -358,7 +370,7 @@ func TestDashboardScansSelectedRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	querier := &dashboardQuerier{result: []osv.Vulnerability{{ID: "CVE-2026-12345", Summary: "test"}}}
-	model := newDashboardModel(ctx, database, querier)
+	model := newDashboardModel(ctx, database, querier, nil)
 	loadDashboard(t, model)
 
 	message := model.scanRelease(release)().(dashboardScanMsg)
@@ -409,7 +421,7 @@ func TestDashboardRecordsAndDisplaysAssessmentHistory(t *testing.T) {
 	}, store.AssessmentInput{Status: store.AssessmentInvestigating, Reviewer: "initial-reviewer"}); err != nil {
 		t.Fatal(err)
 	}
-	model := newDashboardModel(ctx, database, &dashboardQuerier{})
+	model := newDashboardModel(ctx, database, &dashboardQuerier{}, nil)
 	loadDashboard(t, model)
 	model.screen = screenFindings
 	model.focusMenu = false
@@ -471,7 +483,7 @@ func TestDashboardReportsScanFailure(t *testing.T) {
 	if _, err := database.CreateComponent(ctx, "gateway", "1.0", "npm", "pkg", "1.0"); err != nil {
 		t.Fatal(err)
 	}
-	model := newDashboardModel(ctx, database, &dashboardQuerier{err: errors.New("offline")})
+	model := newDashboardModel(ctx, database, &dashboardQuerier{err: errors.New("offline")}, nil)
 	message := model.scanRelease(release)().(dashboardScanMsg)
 	model.scanning = true
 	model.Update(message)
@@ -495,11 +507,11 @@ func TestDashboardSynchronizesOSVSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	querier := &dashboardQuerier{result: []osv.Vulnerability{{ID: "CVE-2026-12345"}}}
-	model := newDashboardModel(ctx, database, querier)
+	model := newDashboardModel(ctx, database, querier, nil)
 	loadDashboard(t, model)
 
 	message := model.syncSnapshot()().(dashboardSyncMsg)
-	if message.err != nil || message.result.Packages != 1 || message.result.Vulnerabilities != 1 {
+	if message.err != nil || message.result.OSV.Packages != 1 || message.result.OSV.Vulnerabilities != 1 {
 		t.Fatalf("sync message = %+v", message)
 	}
 	model.syncing = true
@@ -511,6 +523,73 @@ func TestDashboardSynchronizesOSVSnapshot(t *testing.T) {
 	if model.data.sync == nil || querier.calls != 1 {
 		t.Fatalf("dashboard sync = %+v; calls = %d", model.data.sync, querier.calls)
 	}
+}
+
+func TestDashboardSynchronizesAndDisplaysCISAKEV(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database := newDashboardTestDatabase(t)
+	if _, err := database.CreateProduct(ctx, "gateway", ""); err != nil {
+		t.Fatal(err)
+	}
+	release, err := database.CreateRelease(ctx, "gateway", "1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateComponent(ctx, "gateway", "1.0", "npm", "pkg", "1.0"); err != nil {
+		t.Fatal(err)
+	}
+	querier := &dashboardQuerier{result: []osv.Vulnerability{{
+		ID: "GHSA-TEST-0001", Aliases: []string{"CVE-2026-12345"},
+	}}}
+	kevFetcher := &dashboardKEVFetcher{catalog: kev.Catalog{
+		CatalogVersion: "2026.10.01",
+		DateReleased:   "2026-10-01T12:00:00Z",
+		Count:          1,
+		SourceURL:      "https://www.cisa.gov/test-kev.json",
+		Vulnerabilities: []kev.Vulnerability{{
+			CVEID:             "CVE-2026-12345",
+			VendorProject:     "Vendor",
+			Product:           "Package",
+			VulnerabilityName: "Test vulnerability",
+			DateAdded:         "2026-10-01",
+			ShortDescription:  "Known exploitation test record.",
+			RequiredAction:    "Apply mitigations.",
+			DueDate:           "2026-10-22",
+		}},
+	}}
+	model := newDashboardModel(ctx, database, querier, kevFetcher)
+	loadDashboard(t, model)
+
+	syncMessage := model.syncSnapshot()().(dashboardSyncMsg)
+	if syncMessage.err != nil || syncMessage.result.CISAKEV == nil || syncMessage.result.CISAKEV.Entries != 1 {
+		t.Fatalf("sync message = %+v", syncMessage)
+	}
+	model.Update(syncMessage)
+	loadDashboard(t, model)
+	if model.data.kevSync == nil || kevFetcher.calls != 1 {
+		t.Fatalf("KEV sync = %+v; fetch calls = %d", model.data.kevSync, kevFetcher.calls)
+	}
+	if content := model.View().Content; !strings.Contains(content, "CISA KEV catalog") || strings.Contains(content, "CISA KEV catalog       NOT SYNCED") {
+		t.Fatalf("overview after KEV sync = %q", content)
+	}
+
+	scanMessage := model.scanRelease(release)().(dashboardScanMsg)
+	if scanMessage.err != nil || scanMessage.result.KnownExploited != 1 {
+		t.Fatalf("scan message = %+v", scanMessage)
+	}
+	model.Update(scanMessage)
+	loadDashboard(t, model)
+	model.screen = screenFindings
+	model.focusMenu = false
+	content := model.View().Content
+	for _, expected := range []string{"YES", "CISA KEV: known exploitation", "Apply mitigations."} {
+		if !strings.Contains(content, expected) {
+			t.Errorf("findings dashboard = %q, want %q", content, expected)
+		}
+	}
+	assertDashboardFits(t, content, dashboardDefaultWidth, dashboardDefaultHeight)
 }
 
 func TestDashboardHelpers(t *testing.T) {

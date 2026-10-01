@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/solongate/psirtmap/internal/kev"
 	"github.com/solongate/psirtmap/internal/osv"
 )
 
@@ -459,6 +460,90 @@ func TestOSVSnapshotLifecycleIsLocalAndAtomic(t *testing.T) {
 	}
 }
 
+func TestKEVCatalogLifecycleAndFindingAliasEnrichment(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err := database.CreateProduct(ctx, "gateway", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateRelease(ctx, "gateway", "1.0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ReconcileFindings(ctx, "gateway", "1.0", []FindingMatch{{
+		Ecosystem: "npm", Component: "pkg", ComponentVersion: "1.0",
+		VulnerabilityID: "GHSA-primary", Aliases: []string{"CVE-2026-12345"},
+	}}, "local-osv-snapshot", time.Now(), 1); err != nil {
+		t.Fatal(err)
+	}
+
+	catalog := kev.Catalog{
+		CatalogVersion: "2026.10.01", DateReleased: "2026-10-01T12:00:00Z", Count: 1,
+		SourceURL: "https://www.cisa.gov/kev.json",
+		Vulnerabilities: []kev.Vulnerability{{
+			CVEID: "CVE-2026-12345", VendorProject: "Vendor", Product: "Gateway",
+			VulnerabilityName: "Known exploited issue", DateAdded: "2026-09-30",
+			ShortDescription: "Actively exploited", RequiredAction: "Apply update",
+			DueDate: "2026-10-21", KnownRansomwareCampaignUse: "Known",
+			CWEs: []string{"CWE-79"},
+		}},
+	}
+	syncResult, err := database.SaveKEVCatalog(ctx, catalog)
+	if err != nil {
+		t.Fatalf("SaveKEVCatalog() error = %v", err)
+	}
+	if syncResult.Entries != 1 || syncResult.CatalogVersion != catalog.CatalogVersion || syncResult.SynchronizedAt.IsZero() {
+		t.Fatalf("KEV sync = %+v", syncResult)
+	}
+	latest, err := database.LatestKEVSync(ctx)
+	if err != nil || latest.Source != catalog.SourceURL || !latest.DateReleased.Equal(syncResult.DateReleased) {
+		t.Fatalf("LatestKEVSync() = %+v, %v", latest, err)
+	}
+	entries, err := database.ListKEVEntries(ctx)
+	if err != nil || len(entries) != 1 || entries[0].CVEID != "CVE-2026-12345" || len(entries[0].CWEs) != 1 {
+		t.Fatalf("ListKEVEntries() = %+v, %v", entries, err)
+	}
+	findings, err := database.ListFindings(ctx, FindingFilter{})
+	if err != nil || len(findings) != 1 || !findings[0].KnownExploited || findings[0].KEV == nil {
+		t.Fatalf("KEV-enriched findings = %+v, %v", findings, err)
+	}
+	if findings[0].KEV.RequiredAction != "Apply update" || findings[0].KEV.KnownRansomwareCampaignUse != "Known" {
+		t.Fatalf("finding KEV metadata = %+v", findings[0].KEV)
+	}
+
+	invalid := catalog
+	invalid.Count = 2
+	if _, err := database.SaveKEVCatalog(ctx, invalid); err == nil {
+		t.Fatal("invalid SaveKEVCatalog() error = nil")
+	}
+	entries, err = database.ListKEVEntries(ctx)
+	if err != nil || len(entries) != 1 || entries[0].CVEID != "CVE-2026-12345" {
+		t.Fatalf("failed update changed KEV snapshot: %+v, %v", entries, err)
+	}
+
+	replacement := kev.Catalog{
+		CatalogVersion: "2026.10.02", DateReleased: "2026-10-02T12:00:00Z", Count: 1,
+		Vulnerabilities: []kev.Vulnerability{{
+			CVEID: "CVE-2026-99999", VendorProject: "Other", Product: "Other",
+			VulnerabilityName: "Replacement", DateAdded: "2026-10-02",
+			ShortDescription: "Replacement entry", RequiredAction: "Update",
+			DueDate: "2026-10-23",
+		}},
+	}
+	if _, err := database.SaveKEVCatalog(ctx, replacement); err != nil {
+		t.Fatal(err)
+	}
+	findings, err = database.ListFindings(ctx, FindingFilter{})
+	if err != nil || len(findings) != 1 || findings[0].KnownExploited || findings[0].KEV != nil {
+		t.Fatalf("finding after KEV replacement = %+v, %v", findings, err)
+	}
+}
+
 func TestFindingReconciliationPreservesLifecycleHistory(t *testing.T) {
 	t.Parallel()
 
@@ -787,6 +872,74 @@ func TestSchemaVersionFourMigratesWithoutLosingFindings(t *testing.T) {
 	history, err := database.ListAssessments(ctx, AssessmentFilter{})
 	if err != nil || history == nil || len(history) != 0 {
 		t.Fatalf("migrated assessment history = %#v, %v", history, err)
+	}
+}
+
+func TestSchemaVersionFiveMigratesWithoutLosingAssessments(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "v5.db")
+	database, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateProduct(ctx, "gateway", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateRelease(ctx, "gateway", "1.0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ReconcileFindings(ctx, "gateway", "1.0", []FindingMatch{{
+		Ecosystem: "npm", Component: "pkg", ComponentVersion: "1.0",
+		VulnerabilityID: "CVE-2026-MIGRATE",
+	}}, "local-osv-snapshot", time.Now(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateAssessment(ctx, AssessmentTarget{
+		Product: "gateway", Release: "1.0", VulnerabilityID: "CVE-2026-MIGRATE",
+	}, AssessmentInput{
+		Status: AssessmentNotAffected, Reviewer: "reviewer", Reason: "Feature disabled",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		"DROP TABLE kev_entries",
+		"DROP TABLE kev_syncs",
+		"PRAGMA user_version = 5",
+	} {
+		if _, err := raw.ExecContext(ctx, statement); err != nil {
+			raw.Close()
+			t.Fatalf("prepare v5 database: %v", err)
+		}
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	database, err = Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open(v5) error = %v", err)
+	}
+	defer database.Close()
+	findings, err := database.ListFindings(ctx, FindingFilter{})
+	if err != nil || len(findings) != 1 || findings[0].Status != AssessmentNotAffected {
+		t.Fatalf("migrated findings = %+v, %v", findings, err)
+	}
+	history, err := database.ListAssessments(ctx, AssessmentFilter{})
+	if err != nil || len(history) != 1 || history[0].Reason != "Feature disabled" {
+		t.Fatalf("migrated assessments = %+v, %v", history, err)
+	}
+	if _, err := database.LatestKEVSync(ctx); !errors.Is(err, ErrSnapshotNotFound) {
+		t.Fatalf("empty migrated KEV snapshot error = %v", err)
 	}
 }
 
