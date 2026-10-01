@@ -158,6 +158,34 @@ func persistScanResult(ctx context.Context, database *store.DB, result *scanResu
 	result.Existing = reconciled.Existing
 	result.Reopened = reconciled.Reopened
 	result.NoLongerMatched = reconciled.NoLongerMatched
+	saved, err := database.ListFindings(ctx, store.FindingFilter{
+		Product: result.Product, Release: result.Release,
+	})
+	if err != nil {
+		return fmt.Errorf("refresh persisted finding statuses: %w", err)
+	}
+	type findingIdentity struct {
+		ecosystem string
+		component string
+		version   string
+		id        string
+	}
+	statuses := make(map[findingIdentity]string, len(saved))
+	for _, item := range saved {
+		statuses[findingIdentity{
+			ecosystem: item.Ecosystem, component: item.Component,
+			version: item.ComponentVersion, id: item.VulnerabilityID,
+		}] = item.Status
+	}
+	for index := range result.Findings {
+		item := &result.Findings[index]
+		if status, ok := statuses[findingIdentity{
+			ecosystem: item.Ecosystem, component: item.Component,
+			version: item.ComponentVersion, id: item.ID,
+		}]; ok {
+			item.Status = status
+		}
+	}
 	return nil
 }
 

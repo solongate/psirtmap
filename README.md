@@ -27,8 +27,7 @@ firmware, and embedded-software manufacturers.
 > [!IMPORTANT]
 > PSIRTMap is pre-1.0. Normal release scans use a local OSV snapshot and do not
 > require internet access after `psirtmap sync`. Creating transferable feed
-> bundles for fully isolated environments and human assessments are
-> planned—not shipped.
+> bundles for fully isolated environments is planned—not shipped.
 
 ## Why PSIRTMap?
 
@@ -48,7 +47,7 @@ is useful evidence; it is not proof that a shipped product is exploitable.
 
 ## What works today
 
-The current release, `v0.0.6`, includes:
+The current release, `v0.0.7`, includes:
 
 - A responsive, keyboard-driven terminal dashboard.
 - Local SQLite inventory for products, releases, and components.
@@ -58,13 +57,16 @@ The current release, `v0.0.6`, includes:
 - Local release scanning with source and snapshot freshness metadata.
 - Durable findings with new, existing, reopened, and no-longer-matched states.
 - A release-filterable `findings` command and dashboard view.
+- Append-only human assessments with `investigating`, `affected`,
+  `not-affected`, and `fixed` decisions.
+- Reviewer, reason, evidence, timestamp, and complete decision history.
 - An explicit `--live` scan mode for direct OSV checks.
 - Human-readable and deterministic JSON output.
 - Single-binary builds for macOS, Linux, and Windows.
 - No account, database server, or PSIRTMap cloud service.
 
-See the [roadmap](ROADMAP.md) for the ordered path to assessments, CISA KEV
-enrichment, offline feeds, and VEX.
+See the [roadmap](ROADMAP.md) for the ordered path to CISA KEV enrichment,
+offline feeds, and VEX.
 
 ## Install
 
@@ -91,6 +93,7 @@ $ psirtmap
 The first run creates `~/.psirtmap/psirtmap.db`. Use `n` to create a product,
 open **Releases**, and press `i` to import its CycloneDX JSON SBOM. Press `u`
 once to update the local OSV snapshot, then open **Scanner** and press `s`.
+Open **Findings**, select a match, and press `a` to record the human decision.
 
 | Key | Action |
 |---|---|
@@ -99,6 +102,7 @@ once to update the local OSV snapshot, then open **Scanner** and press `s`.
 | `1`–`6` | Open a section directly |
 | `n` | Create an item in the current section |
 | `i` | Import CycloneDX JSON from **Releases** |
+| `a` or `Enter` | Assess the selected finding from **Findings** |
 | `u` | Update the local OSV snapshot; this step uses the internet |
 | `s` or `Enter` | Scan the selected release |
 | `r` | Refresh local inventory |
@@ -124,6 +128,11 @@ psirtmap release import AG-200@2.2 ./firmware-2.2.cdx.json
 psirtmap sync
 psirtmap scan AG-200@2.2
 psirtmap findings AG-200@2.2
+psirtmap assess AG-200@2.2 CVE-2026-12345 \
+  --status not-affected \
+  --reviewer emirhan \
+  --reason "Vulnerable functionality is disabled in this firmware build"
+psirtmap assess history AG-200@2.2 CVE-2026-12345
 ```
 
 The import accepts CycloneDX JSON 1.2–1.7, walks nested components, derives
@@ -152,6 +161,7 @@ psirtmap release import AG-200@2.2 ./firmware-2.2.cdx.json --json
 psirtmap sync --json
 psirtmap scan AG-200@2.2 --json
 psirtmap findings --all --json
+psirtmap assess history AG-200@2.2 CVE-2026-12345 --json
 ```
 
 Run `psirtmap help` or `psirtmap <command> --help` for complete usage.
@@ -165,7 +175,7 @@ CycloneDX SBOM -> Product release -> Component inventory
                                          |
 OSV API -------- psirtmap sync --------> local OSV snapshot
                                          |
-                              offline release scan -> durable finding -> Human review
+                              offline release scan -> durable finding -> human assessment
 ```
 
 For example:
@@ -175,7 +185,8 @@ AG-200
 └── 2.2
     └── OpenSSL 3.0.8
         └── CVE / OSV match
-            └── NEEDS REVIEW
+            └── NOT AFFECTED
+                └── reviewer + reason + evidence + timestamp
 ```
 
 During `sync`, PSIRTMap sends each distinct component ecosystem, package name,
@@ -195,21 +206,27 @@ returning match is `reopened`, and a finding missing from the latest complete
 scan becomes `no-longer-matched` without losing its history. `scan --live` is
 diagnostic and never changes durable findings.
 
+An assessment changes the finding's current review state while appending a
+history entry. Final decisions—`affected`, `not-affected`, and
+`fixed`—require a reason. `investigating` may be recorded while evidence is
+still being collected. Re-scanning refreshes match evidence without erasing or
+resetting the human decision.
+
 The explicit data model is:
 
 ```text
 PRODUCT -> RELEASE -> COMPONENT -> VULNERABILITY -> FINDING -> ASSESSMENT
 ```
 
-Vulnerability records and findings now live locally. Human assessments are the
-next product milestone.
+Vulnerability records, findings, and assessment history all live locally.
+CISA KEV enrichment is the next product milestone.
 
 ## Local data
 
 The default database is `~/.psirtmap/psirtmap.db`. PSIRTMap creates it with
 permissions `0600` and applies compatible schema migrations automatically. It
 contains shipped-product inventory, the active OSV snapshot, scan audit
-records, and durable finding history.
+records, durable finding history, and append-only human assessments.
 
 Choose another database with either:
 

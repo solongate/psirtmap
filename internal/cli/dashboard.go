@@ -49,11 +49,12 @@ var dashboardScreens = []struct {
 }
 
 type dashboardInventory struct {
-	products   []store.Product
-	releases   []store.Release
-	components []store.Component
-	findings   []store.Finding
-	sync       *store.VulnerabilitySync
+	products    []store.Product
+	releases    []store.Release
+	components  []store.Component
+	findings    []store.Finding
+	assessments []store.Assessment
+	sync        *store.VulnerabilitySync
 }
 
 type dashboardInventoryMsg struct {
@@ -84,6 +85,7 @@ const (
 	formRelease
 	formComponent
 	formSBOMImport
+	formAssessment
 )
 
 type dashboardField struct {
@@ -98,6 +100,7 @@ type dashboardForm struct {
 	fields []dashboardField
 	active int
 	err    error
+	target *store.Finding
 }
 
 type dashboardModel struct {
@@ -205,8 +208,13 @@ func (m *dashboardModel) loadInventory() tea.Cmd {
 		if err != nil {
 			return dashboardInventoryMsg{err: err}
 		}
+		assessments, err := m.database.ListAssessments(m.ctx, store.AssessmentFilter{})
+		if err != nil {
+			return dashboardInventoryMsg{err: err}
+		}
 		inventory := dashboardInventory{
-			products: products, releases: releases, components: components, findings: findings,
+			products: products, releases: releases, components: components,
+			findings: findings, assessments: assessments,
 		}
 		latestSync, err := m.database.LatestVulnerabilitySync(m.ctx)
 		if err == nil {
@@ -317,6 +325,8 @@ func (m *dashboardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.openCreateForm()
 		case "i":
 			return m, m.openImportForm()
+		case "a":
+			return m, m.openAssessmentForm()
 		case "s":
 			if m.screen == screenScanner {
 				return m.startScan()
@@ -345,6 +355,8 @@ func (m *dashboardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.focusMenu = false
 			} else if m.screen == screenScanner {
 				return m.startScan()
+			} else if m.screen == screenFindings {
+				return m, m.openAssessmentForm()
 			}
 		}
 	}
@@ -371,6 +383,32 @@ func (m *dashboardModel) openImportForm() tea.Cmd {
 		fields: []dashboardField{
 			newDashboardFieldWithValue("Product@release", "Existing product; the release may be new", reference),
 			newDashboardField("CycloneDX JSON path", "Absolute or current-directory-relative file path", "./firmware.cdx.json"),
+		},
+	}
+	m.form.fields[0].input.Focus()
+	return nil
+}
+
+func (m *dashboardModel) openAssessmentForm() tea.Cmd {
+	if m.screen != screenFindings {
+		m.setStatus("Open Findings and press a or Enter to record an assessment", false)
+		return nil
+	}
+	if len(m.data.findings) == 0 {
+		m.setStatus("Run a local release scan before recording an assessment", true)
+		return nil
+	}
+	selected := min(m.selected[screenFindings], len(m.data.findings)-1)
+	finding := m.data.findings[selected]
+	m.form = dashboardForm{
+		kind:   formAssessment,
+		title:  "Assess " + finding.VulnerabilityID + " in " + finding.Product + "@" + finding.Release,
+		target: &finding,
+		fields: []dashboardField{
+			newDashboardFieldWithValue("Status", "investigating, affected, not-affected, or fixed", store.AssessmentInvestigating),
+			newDashboardField("Reason", "Required for affected, not-affected, and fixed", "Feature disabled in this firmware build"),
+			newDashboardField("Reviewer", "Person responsible for this decision", "reviewer name"),
+			newDashboardField("Evidence (optional)", "Ticket, test report, advisory, or other reference", "SEC-123 or document reference"),
 		},
 	}
 	m.form.fields[0].input.Focus()
@@ -480,6 +518,8 @@ func (m *dashboardModel) openCreateForm() tea.Cmd {
 				newDashboardField("Package version", "Exact version in the release", "3.0.8"),
 			},
 		}
+	case screenFindings:
+		return m.openAssessmentForm()
 	case screenScanner:
 		m.setStatus("Select a release and press s or Enter to scan", false)
 		return nil
@@ -550,6 +590,22 @@ func (m *dashboardModel) saveForm() tea.Cmd {
 					result.Imported, result.Product, result.Release, result.Skipped,
 				),
 				err: err,
+			}
+		case formAssessment:
+			if m.form.target == nil {
+				return dashboardSavedMsg{err: errors.New("assessment target is unavailable")}
+			}
+			target := *m.form.target
+			assessment, err := m.database.CreateAssessment(m.ctx, store.AssessmentTarget{
+				Product: target.Product, Release: target.Release,
+				VulnerabilityID: target.VulnerabilityID, Ecosystem: target.Ecosystem,
+				Component: target.Component, ComponentVersion: target.ComponentVersion,
+			}, store.AssessmentInput{
+				Status: values[0], Reason: values[1], Reviewer: values[2], Evidence: values[3],
+			})
+			return dashboardSavedMsg{
+				message: fmt.Sprintf("Recorded %s assessment for %s", assessment.Status, assessment.VulnerabilityID),
+				err:     err,
 			}
 		default:
 			return dashboardSavedMsg{err: errors.New("unknown create action")}
@@ -868,6 +924,7 @@ func (m *dashboardModel) renderOverview(width, height int) string {
 		statusLine("●", "Local inventory", "READY", true),
 		statusLine("●", "CycloneDX import", "READY", true),
 		statusLine("●", "Finding history", "READY", true),
+		statusLine("●", "Human assessments", "READY", true),
 	)
 	if m.data.sync == nil {
 		lines = append(lines, statusLine("○", "Local OSV snapshot", "NOT SYNCED", false))
@@ -887,6 +944,7 @@ func (m *dashboardModel) renderOverview(width, height int) string {
 			"  1. Press n to create a product",
 			"  2. Open Releases and press i to import its CycloneDX SBOM",
 			"  3. Press u to update local OSV data, then scan the release",
+			"  4. Open Findings and press a to record the human decision",
 		)
 	}
 	if len(m.data.releases) > 0 && height > 17 {
@@ -971,7 +1029,7 @@ func (m *dashboardModel) renderComponents(width, height int) string {
 func (m *dashboardModel) renderFindings(width, height int) string {
 	lines := []string{
 		styleTitle.Render("Findings") + "  " + styleMuted.Render(fmt.Sprintf("%d active", len(m.data.findings))),
-		styleMuted.Render("Vulnerability        Component                    Shipped release"),
+		styleMuted.Render("Vulnerability        Component                    Assessment       Match"),
 	}
 	if len(m.data.findings) == 0 {
 		return strings.Join(append(
@@ -979,17 +1037,59 @@ func (m *dashboardModel) renderFindings(width, height int) string {
 			styleMuted.Render("Run a local release scan to create durable findings."),
 		), "\n")
 	}
-	rows := visibleRange(len(m.data.findings), m.selected[screenFindings], max(1, height-4))
+	rows := visibleRange(len(m.data.findings), m.selected[screenFindings], max(1, height-12))
 	for index := rows.start; index < rows.end; index++ {
 		item := m.data.findings[index]
-		row := fmt.Sprintf("%-20s %-28s %s",
+		row := fmt.Sprintf("%-20s %-28s %-16s %s",
 			fitText(item.VulnerabilityID, 20),
 			fitText(item.Component+"@"+item.ComponentVersion, 28),
-			item.Product+"@"+item.Release,
+			fitText(item.Status, 16), item.MatchStatus,
 		)
 		lines = append(lines, selectableRow(fitText(row, width), index == m.selected[screenFindings]))
 	}
+	selected := m.data.findings[min(m.selected[screenFindings], len(m.data.findings)-1)]
+	lines = append(lines, "", styleTitle.Render("Selected finding"),
+		fmt.Sprintf("  %s  •  %s@%s  •  %s:%s@%s",
+			selected.VulnerabilityID, selected.Product, selected.Release,
+			selected.Ecosystem, selected.Component, selected.ComponentVersion),
+	)
+	history := m.assessmentHistory(selected.FindingID)
+	if len(history) == 0 {
+		lines = append(lines,
+			styleWarn.Render("  Needs human review."),
+			styleMuted.Render("  Press a or Enter to record an assessment."),
+		)
+		return strings.Join(lines, "\n")
+	}
+	lines = append(lines, styleMuted.Render(fmt.Sprintf("  Assessment history: %d decision(s)", len(history))))
+	available := max(1, height-len(lines)-2)
+	for index, assessment := range history[:min(len(history), available)] {
+		label := "Earlier"
+		if index == 0 {
+			label = "Latest"
+		}
+		lines = append(lines, fmt.Sprintf("  %s: %s by %s at %s", label,
+			styleGood.Render(assessment.Status), oneLine(assessment.Reviewer),
+			assessment.AssessedAt.Format("2006-01-02 15:04Z")))
+	}
+	latest := history[0]
+	if latest.Reason != "" {
+		lines = append(lines, fitText("  Reason: "+oneLine(latest.Reason), width))
+	}
+	if latest.Evidence != "" && len(lines) < height {
+		lines = append(lines, fitText("  Evidence: "+oneLine(latest.Evidence), width))
+	}
 	return strings.Join(lines, "\n")
+}
+
+func (m *dashboardModel) assessmentHistory(findingID int64) []store.Assessment {
+	history := make([]store.Assessment, 0)
+	for _, assessment := range m.data.assessments {
+		if assessment.FindingID == findingID {
+			history = append(history, assessment)
+		}
+	}
+	return history
 }
 
 func (m *dashboardModel) renderScanner(width, height int) string {
@@ -1034,7 +1134,8 @@ func (m *dashboardModel) renderScanner(width, height int) string {
 	}
 	available := max(1, height-len(lines)-2)
 	for _, item := range m.scan.Findings[:min(available, len(m.scan.Findings))] {
-		row := fmt.Sprintf("%-18s %-28s %s", fitText(item.ID, 18), fitText(item.Component+"@"+item.ComponentVersion, 28), "NEEDS REVIEW")
+		status := strings.ToUpper(strings.ReplaceAll(item.Status, "-", " "))
+		row := fmt.Sprintf("%-18s %-28s %s", fitText(item.ID, 18), fitText(item.Component+"@"+item.ComponentVersion, 28), status)
 		lines = append(lines, fitText(row, width))
 	}
 	if len(m.scan.Findings) > available {
@@ -1095,6 +1196,7 @@ func (m *dashboardModel) renderHelp(width int) string {
 		helpRow("1–6", "Open a section directly"),
 		helpRow("n", "Create an item for the current section"),
 		helpRow("i", "Import CycloneDX JSON from Releases"),
+		helpRow("a / Enter", "Assess the selected finding"),
 		helpRow("s / Enter", "Scan the selected release"),
 		helpRow("u", "Update the local OSV snapshot (uses internet)"),
 		helpRow("r", "Refresh local inventory"),
@@ -1117,6 +1219,7 @@ func (m *dashboardModel) renderFooter() string {
 		styleKey.Render("→/enter") + " open",
 		styleKey.Render("n") + " new",
 		styleKey.Render("i") + " import",
+		styleKey.Render("a") + " assess",
 		styleKey.Render("s") + " scan",
 		styleKey.Render("u") + " sync",
 		styleKey.Render("?") + " help",

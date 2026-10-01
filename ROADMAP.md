@@ -19,7 +19,7 @@ ordered so every release remains small, testable, and useful on its own.
 | SBOM import | Build release inventory from CycloneDX JSON | Shipped in `v0.0.4` |
 | Local vulnerability data | Sync OSV data and scan from a local snapshot | Shipped in `v0.0.5` |
 | Finding lifecycle | Persist matches and track what changed | Shipped in `v0.0.6` |
-| Human assessment | Record impact decisions and evidence | Planned |
+| Human assessment | Record impact decisions and evidence | Shipped in `v0.0.7` |
 | KEV enrichment | Prioritize known exploitation | Planned |
 | Offline feeds | Scan from validated, transferable feed bundles | Planned |
 | VEX | Export human assessments in a machine-readable format | Later |
@@ -74,28 +74,33 @@ range evaluation remain part of the offline-feed milestone.
 - `psirtmap findings` and the dashboard expose the active finding inventory.
 - Direct `scan --live` checks remain diagnostic and cannot alter history.
 
-## Next complete PSIRT workflow
+## Shipped: human assessment
+
+`v0.0.7` closes the first complete finding-to-decision loop:
+
+- `psirtmap assess` records `investigating`, `affected`, `not-affected`, and
+  `fixed` states.
+- Final impact decisions require a reason.
+- Reviewer, timestamp, optional evidence, and component identity are stored.
+- Every decision is appended to history instead of overwriting the
+  previous assessment.
+- Re-scanning updates match evidence without resetting the human decision.
+- The CLI and terminal dashboard both expose the current state and history.
+
+## Next prioritization and operator work
 
 Development now proceeds in this order.
 
-### 1. Human assessment
-
-- Support `investigating`, `affected`, `not-affected`, and `fixed` states.
-- Require a reason for final impact decisions.
-- Record reviewer, timestamp, evidence, and change history.
-- Preserve earlier decisions instead of overwriting them silently.
-
-### 2. CISA KEV enrichment
+### 1. CISA KEV enrichment
 
 - Download and normalize the official KEV catalog.
 - Mark findings with known exploitation.
 - Display source and feed freshness.
 - Treat KEV as prioritization context—not proof that a product is affected.
 
-### 3. Stable operator workflow
+### 2. Stable operator workflow
 
-- Expose import, findings, assessments, and KEV consistently in the dashboard
-  and scriptable CLI.
+- Expose KEV consistently in the dashboard and scriptable CLI.
 - Add safe database backup and migration guidance.
 - Publish end-to-end demo data and operator documentation.
 

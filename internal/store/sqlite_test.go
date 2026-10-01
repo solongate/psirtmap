@@ -520,7 +520,7 @@ func TestFindingReconciliationPreservesLifecycleHistory(t *testing.T) {
 		t.Fatalf("active findings after close = %#v, %v", active, err)
 	}
 	all, err := database.ListFindings(ctx, FindingFilter{IncludeInactive: true})
-	if err != nil || len(all) != 1 || all[0].Active || all[0].Status != "no-longer-matched" || all[0].NoLongerMatchedAt == nil {
+	if err != nil || len(all) != 1 || all[0].Active || all[0].Status != "needs-review" || all[0].MatchStatus != "no-longer-matched" || all[0].NoLongerMatchedAt == nil {
 		t.Fatalf("all findings after close = %+v, %v", all, err)
 	}
 
@@ -600,6 +600,193 @@ func TestFindingReconciliationRejectsInvalidInputWithoutWriting(t *testing.T) {
 	}
 	if scans != 0 || findings != 0 {
 		t.Fatalf("failed transaction wrote scans=%d findings=%d", scans, findings)
+	}
+}
+
+func TestAssessmentHistoryIsAppendOnlyAndPreservesFindingLifecycle(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err := database.CreateProduct(ctx, "AG-200", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateRelease(ctx, "AG-200", "2.2"); err != nil {
+		t.Fatal(err)
+	}
+	match := FindingMatch{
+		Ecosystem: "Alpine", Component: "openssl", ComponentVersion: "3.0.8",
+		VulnerabilityID: "GHSA-PRIMARY", Aliases: []string{"CVE-2026-12345"}, Summary: "OpenSSL impact",
+	}
+	if _, err := database.ReconcileFindings(ctx, "AG-200", "2.2", []FindingMatch{match}, "local-osv-snapshot", time.Now(), 1); err != nil {
+		t.Fatal(err)
+	}
+	target := AssessmentTarget{Product: "ag-200", Release: "2.2", VulnerabilityID: "CVE-2026-12345"}
+	first, err := database.CreateAssessment(ctx, target, AssessmentInput{
+		Status: AssessmentInvestigating, Reviewer: "emirhan",
+	})
+	if err != nil {
+		t.Fatalf("CreateAssessment(investigating) error = %v", err)
+	}
+	second, err := database.CreateAssessment(ctx, target, AssessmentInput{
+		Status: AssessmentAffected, Reviewer: "psirt@example.com",
+		Reason: "The vulnerable feature is enabled.", Evidence: "SEC-123",
+	})
+	if err != nil {
+		t.Fatalf("CreateAssessment(affected) error = %v", err)
+	}
+	if first.AssessmentID == second.AssessmentID || second.Product != "AG-200" || second.Status != AssessmentAffected {
+		t.Fatalf("assessments = first %+v, second %+v", first, second)
+	}
+
+	history, err := database.ListAssessments(ctx, AssessmentFilter{
+		Product: "AG-200", Release: "2.2", VulnerabilityID: "CVE-2026-12345",
+	})
+	if err != nil || len(history) != 2 {
+		t.Fatalf("ListAssessments() = %+v, %v", history, err)
+	}
+	if history[0].Status != AssessmentAffected || history[0].Reason == "" || history[0].Evidence != "SEC-123" || history[1].Status != AssessmentInvestigating {
+		t.Fatalf("assessment history = %+v", history)
+	}
+	findings, err := database.ListFindings(ctx, FindingFilter{Status: AssessmentAffected})
+	if err != nil || len(findings) != 1 || findings[0].Status != AssessmentAffected || findings[0].MatchStatus != "matched" {
+		t.Fatalf("affected findings = %+v, %v", findings, err)
+	}
+
+	// A new scan refreshes matching evidence without erasing the human decision.
+	if _, err := database.ReconcileFindings(ctx, "AG-200", "2.2", []FindingMatch{match}, "local-osv-snapshot", time.Now(), 1); err != nil {
+		t.Fatal(err)
+	}
+	findings, err = database.ListFindings(ctx, FindingFilter{})
+	if err != nil || len(findings) != 1 || findings[0].Status != AssessmentAffected {
+		t.Fatalf("finding after rescan = %+v, %v", findings, err)
+	}
+	if _, err := database.ReconcileFindings(ctx, "AG-200", "2.2", nil, "local-osv-snapshot", time.Now(), 1); err != nil {
+		t.Fatal(err)
+	}
+	findings, err = database.ListFindings(ctx, FindingFilter{IncludeInactive: true})
+	if err != nil || len(findings) != 1 || findings[0].Status != AssessmentAffected || findings[0].MatchStatus != "no-longer-matched" {
+		t.Fatalf("inactive assessed finding = %+v, %v", findings, err)
+	}
+}
+
+func TestAssessmentValidationAmbiguityAndAtomicity(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err := database.CreateProduct(ctx, "gateway", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateRelease(ctx, "gateway", "1.0"); err != nil {
+		t.Fatal(err)
+	}
+	matches := []FindingMatch{
+		{Ecosystem: "npm", Component: "pkg-a", ComponentVersion: "1.0", VulnerabilityID: "CVE-2026-SHARED"},
+		{Ecosystem: "npm", Component: "pkg-b", ComponentVersion: "2.0", VulnerabilityID: "CVE-2026-SHARED"},
+	}
+	if _, err := database.ReconcileFindings(ctx, "gateway", "1.0", matches, "local-osv-snapshot", time.Now(), 2); err != nil {
+		t.Fatal(err)
+	}
+	baseTarget := AssessmentTarget{Product: "gateway", Release: "1.0", VulnerabilityID: "CVE-2026-SHARED"}
+	if _, err := database.CreateAssessment(ctx, baseTarget, AssessmentInput{
+		Status: AssessmentInvestigating, Reviewer: "reviewer",
+	}); !errors.Is(err, ErrAmbiguousFinding) {
+		t.Fatalf("ambiguous assessment error = %v", err)
+	}
+	for _, input := range []AssessmentInput{
+		{Status: "unknown", Reviewer: "reviewer"},
+		{Status: AssessmentAffected, Reviewer: "reviewer"},
+		{Status: AssessmentInvestigating},
+	} {
+		if _, err := database.CreateAssessment(ctx, AssessmentTarget{
+			Product: "gateway", Release: "1.0", VulnerabilityID: "CVE-2026-SHARED",
+			Ecosystem: "npm", Component: "pkg-a", ComponentVersion: "1.0",
+		}, input); err == nil {
+			t.Fatalf("invalid assessment %+v succeeded", input)
+		}
+	}
+
+	target := AssessmentTarget{
+		Product: "gateway", Release: "1.0", VulnerabilityID: "CVE-2026-SHARED",
+		Ecosystem: "npm", Component: "pkg-a", ComponentVersion: "1.0",
+	}
+	if _, err := database.db.ExecContext(ctx, `CREATE TRIGGER reject_review_status
+		BEFORE UPDATE OF review_status ON findings BEGIN SELECT RAISE(ABORT, 'forced review failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateAssessment(ctx, target, AssessmentInput{
+		Status: AssessmentNotAffected, Reviewer: "reviewer", Reason: "Not reachable",
+	}); err == nil || !strings.Contains(err.Error(), "forced review failure") {
+		t.Fatalf("forced transaction error = %v", err)
+	}
+	var count int
+	if err := database.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM assessments").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("rolled-back assessment count = %d", count)
+	}
+}
+
+func TestSchemaVersionFourMigratesWithoutLosingFindings(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "v4.db")
+	database, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateProduct(ctx, "gateway", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateRelease(ctx, "gateway", "1.0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ReconcileFindings(ctx, "gateway", "1.0", []FindingMatch{{
+		Ecosystem: "npm", Component: "pkg", ComponentVersion: "1.0", VulnerabilityID: "CVE-2026-MIGRATE",
+	}}, "local-osv-snapshot", time.Now(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(ctx, "DROP TABLE assessments"); err != nil {
+		raw.Close()
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(ctx, "PRAGMA user_version = 4"); err != nil {
+		raw.Close()
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database, err = Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open(v4) error = %v", err)
+	}
+	defer database.Close()
+	findings, err := database.ListFindings(ctx, FindingFilter{})
+	if err != nil || len(findings) != 1 || findings[0].VulnerabilityID != "CVE-2026-MIGRATE" {
+		t.Fatalf("migrated findings = %+v, %v", findings, err)
+	}
+	history, err := database.ListAssessments(ctx, AssessmentFilter{})
+	if err != nil || history == nil || len(history) != 0 {
+		t.Fatalf("migrated assessment history = %#v, %v", history, err)
 	}
 }
 

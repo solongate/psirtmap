@@ -445,6 +445,130 @@ func TestLocalScanPersistsFindingLifecycleAndLiveScanDoesNot(t *testing.T) {
 	}
 }
 
+func TestAssessmentCLIRecordsFiltersAndShowsImmutableHistory(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "assessment.db")
+	querier := &inventoryQuerier{results: map[string]packageResult{
+		"npm:pkg@1.0": {vulnerabilities: []osv.Vulnerability{{
+			ID: "CVE-2026-ASSESS", Summary: "human review required",
+		}}},
+	}}
+	for _, arguments := range [][]string{
+		{"product", "add", "gateway"},
+		{"release", "add", "gateway", "1.0"},
+		{"component", "add", "gateway@1.0", "pkg@1.0", "-e", "npm"},
+		{"sync"},
+		{"scan", "gateway@1.0"},
+	} {
+		exitCode, _, stderr := runWithDatabase(t, path, querier, arguments...)
+		requireSuccess(t, exitCode, stderr)
+	}
+
+	exitCode, stdout, stderr := runWithDatabase(t, path, querier,
+		"assess", "gateway@1.0", "CVE-2026-ASSESS",
+		"--status", "investigating", "--reviewer", "emirhan",
+	)
+	requireSuccess(t, exitCode, stderr)
+	for _, expected := range []string{"ASSESSMENT RECORDED", "investigating", "emirhan", "npm:pkg@1.0"} {
+		if !strings.Contains(stdout, expected) {
+			t.Errorf("investigating stdout = %q, want %q", stdout, expected)
+		}
+	}
+
+	exitCode, _, stderr = runWithDatabase(t, path, querier,
+		"assess", "gateway@1.0", "CVE-2026-ASSESS",
+		"--status", "affected", "--reviewer", "emirhan",
+	)
+	if exitCode != 1 || !strings.Contains(stderr, "reason is required") {
+		t.Fatalf("missing reason = code %d, stderr %q", exitCode, stderr)
+	}
+
+	exitCode, stdout, stderr = runWithDatabase(t, path, querier,
+		"assess", "gateway@1.0", "CVE-2026-ASSESS",
+		"--status=not-affected", "--reviewer=emirhan",
+		"--reason=Feature disabled", "--evidence=SEC-123", "--json",
+	)
+	requireSuccess(t, exitCode, stderr)
+	var latest struct {
+		Status   string `json:"status"`
+		Reason   string `json:"reason"`
+		Evidence string `json:"evidence"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &latest); err != nil {
+		t.Fatalf("decode assessment %q: %v", stdout, err)
+	}
+	if latest.Status != "not-affected" || latest.Reason != "Feature disabled" || latest.Evidence != "SEC-123" {
+		t.Fatalf("assessment = %+v", latest)
+	}
+
+	exitCode, stdout, stderr = runWithDatabase(t, path, querier,
+		"findings", "gateway@1.0", "--status", "not-affected",
+	)
+	requireSuccess(t, exitCode, stderr)
+	for _, expected := range []string{"CVE-2026-ASSESS", "not-affected", "matched"} {
+		if !strings.Contains(stdout, expected) {
+			t.Errorf("filtered findings stdout = %q, want %q", stdout, expected)
+		}
+	}
+
+	exitCode, stdout, stderr = runWithDatabase(t, path, querier,
+		"assess", "history", "gateway@1.0", "CVE-2026-ASSESS", "--json",
+	)
+	requireSuccess(t, exitCode, stderr)
+	var history []struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &history); err != nil {
+		t.Fatalf("decode history %q: %v", stdout, err)
+	}
+	if len(history) != 2 || history[0].Status != "not-affected" || history[1].Status != "investigating" {
+		t.Fatalf("history = %+v", history)
+	}
+	exitCode, stdout, stderr = runWithDatabase(t, path, querier, "scan", "gateway@1.0")
+	requireSuccess(t, exitCode, stderr)
+	if !strings.Contains(stdout, "not-affected") || strings.Contains(stdout, "needs-review") {
+		t.Fatalf("assessed rescan stdout = %q", stdout)
+	}
+}
+
+func TestAssessmentCLIRequiresComponentWhenFindingIsAmbiguous(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "ambiguous.db")
+	querier := &inventoryQuerier{results: map[string]packageResult{
+		"npm:pkg-a@1.0": {vulnerabilities: []osv.Vulnerability{{ID: "CVE-2026-SHARED"}}},
+		"npm:pkg-b@2.0": {vulnerabilities: []osv.Vulnerability{{ID: "CVE-2026-SHARED"}}},
+	}}
+	for _, arguments := range [][]string{
+		{"product", "add", "gateway"},
+		{"release", "add", "gateway", "1.0"},
+		{"component", "add", "gateway@1.0", "pkg-a@1.0", "-e", "npm"},
+		{"component", "add", "gateway@1.0", "pkg-b@2.0", "-e", "npm"},
+		{"sync"},
+		{"scan", "gateway@1.0"},
+	} {
+		exitCode, _, stderr := runWithDatabase(t, path, querier, arguments...)
+		requireSuccess(t, exitCode, stderr)
+	}
+	exitCode, _, stderr := runWithDatabase(t, path, querier,
+		"assess", "gateway@1.0", "CVE-2026-SHARED",
+		"--status", "investigating", "--reviewer", "emirhan",
+	)
+	if exitCode != 1 || !strings.Contains(stderr, "multiple components") {
+		t.Fatalf("ambiguous assessment = code %d, stderr %q", exitCode, stderr)
+	}
+	exitCode, stdout, stderr := runWithDatabase(t, path, querier,
+		"assess", "gateway@1.0", "CVE-2026-SHARED",
+		"--status", "investigating", "--reviewer", "emirhan",
+		"--component", "npm:pkg-a@1.0",
+	)
+	requireSuccess(t, exitCode, stderr)
+	if !strings.Contains(stdout, "npm:pkg-a@1.0") {
+		t.Fatalf("component assessment stdout = %q", stdout)
+	}
+}
+
 func TestGlobalDatabaseOptionValidation(t *testing.T) {
 	t.Parallel()
 
@@ -465,7 +589,7 @@ func TestGlobalDatabaseOptionValidation(t *testing.T) {
 func TestInventoryHelpDoesNotCreateDatabase(t *testing.T) {
 	t.Parallel()
 
-	for _, command := range []string{"init", "product", "release", "component", "sync", "scan", "findings", "dashboard", "ui"} {
+	for _, command := range []string{"init", "product", "release", "component", "sync", "scan", "findings", "assess", "dashboard", "ui"} {
 		command := command
 		t.Run(command, func(t *testing.T) {
 			t.Parallel()
@@ -493,7 +617,7 @@ func TestRootCommandsAndUsageErrors(t *testing.T) {
 		useStderr  bool
 	}{
 		{name: "root help", args: []string{"--help"}, wantCode: 0, wantOutput: "Inventory commands:"},
-		{name: "version", args: []string{"version"}, wantCode: 0, wantOutput: "0.0.6"},
+		{name: "version", args: []string{"version"}, wantCode: 0, wantOutput: "0.0.7"},
 		{name: "unknown", args: []string{"wat"}, wantCode: 2, wantOutput: "unknown command", useStderr: true},
 		{name: "missing database value", args: []string{"--database"}, wantCode: 2, wantOutput: "requires a value", useStderr: true},
 	}
