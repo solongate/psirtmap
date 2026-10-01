@@ -15,11 +15,12 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/solongate/psirtmap/internal/kev"
 	"github.com/solongate/psirtmap/internal/osv"
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 5
+const schemaVersion = 6
 
 const (
 	AssessmentNeedsReview   = "needs-review"
@@ -129,6 +130,15 @@ type VulnerabilitySync struct {
 	Vulnerabilities int       `json:"vulnerabilities"`
 }
 
+// KEVSync summarizes one successfully committed CISA KEV catalog.
+type KEVSync struct {
+	Source         string    `json:"source"`
+	CatalogVersion string    `json:"catalog_version"`
+	DateReleased   time.Time `json:"date_released"`
+	SynchronizedAt time.Time `json:"synchronized_at"`
+	Entries        int       `json:"entries"`
+}
+
 // FindingMatch is one package-version vulnerability match produced by a
 // trusted local snapshot scan.
 type FindingMatch struct {
@@ -142,21 +152,23 @@ type FindingMatch struct {
 
 // Finding is a durable potential-impact record for one shipped release.
 type Finding struct {
-	FindingID         int64      `json:"finding_id"`
-	Product           string     `json:"product"`
-	Release           string     `json:"release"`
-	Ecosystem         string     `json:"ecosystem"`
-	Component         string     `json:"component"`
-	ComponentVersion  string     `json:"component_version"`
-	VulnerabilityID   string     `json:"id"`
-	Aliases           []string   `json:"aliases"`
-	Summary           string     `json:"summary,omitempty"`
-	Status            string     `json:"status"`
-	MatchStatus       string     `json:"match_status"`
-	Active            bool       `json:"active"`
-	FirstSeenAt       time.Time  `json:"first_seen_at"`
-	LastSeenAt        time.Time  `json:"last_seen_at"`
-	NoLongerMatchedAt *time.Time `json:"no_longer_matched_at,omitempty"`
+	FindingID         int64              `json:"finding_id"`
+	Product           string             `json:"product"`
+	Release           string             `json:"release"`
+	Ecosystem         string             `json:"ecosystem"`
+	Component         string             `json:"component"`
+	ComponentVersion  string             `json:"component_version"`
+	VulnerabilityID   string             `json:"id"`
+	Aliases           []string           `json:"aliases"`
+	Summary           string             `json:"summary,omitempty"`
+	Status            string             `json:"status"`
+	MatchStatus       string             `json:"match_status"`
+	Active            bool               `json:"active"`
+	FirstSeenAt       time.Time          `json:"first_seen_at"`
+	LastSeenAt        time.Time          `json:"last_seen_at"`
+	NoLongerMatchedAt *time.Time         `json:"no_longer_matched_at,omitempty"`
+	KnownExploited    bool               `json:"known_exploited"`
+	KEV               *kev.Vulnerability `json:"kev,omitempty"`
 }
 
 // FindingFilter limits a finding list to a release and optionally includes
@@ -472,6 +484,41 @@ func (d *DB) migrate(ctx context.Context) error {
 			)`,
 			`CREATE INDEX IF NOT EXISTS assessments_finding_time_idx ON assessments(finding_id, assessed_at, id)`,
 			`PRAGMA user_version = 5`,
+		}
+		for _, statement := range statements {
+			if _, err := transaction.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("apply schema migration: %w", err)
+			}
+		}
+	}
+
+	if currentVersion < 6 {
+		statements := []string{
+			`CREATE TABLE IF NOT EXISTS kev_syncs (
+				id INTEGER PRIMARY KEY,
+				source TEXT NOT NULL,
+				catalog_version TEXT NOT NULL,
+				date_released TEXT NOT NULL,
+				synchronized_at TEXT NOT NULL,
+				entry_count INTEGER NOT NULL
+			)`,
+			`CREATE TABLE IF NOT EXISTS kev_entries (
+				cve_id TEXT PRIMARY KEY COLLATE NOCASE,
+				sync_id INTEGER NOT NULL REFERENCES kev_syncs(id) ON DELETE CASCADE,
+				vendor_project TEXT NOT NULL,
+				product TEXT NOT NULL,
+				vulnerability_name TEXT NOT NULL,
+				date_added TEXT NOT NULL,
+				short_description TEXT NOT NULL,
+				required_action TEXT NOT NULL,
+				due_date TEXT NOT NULL,
+				known_ransomware_campaign_use TEXT NOT NULL DEFAULT '',
+				forensic_triage TEXT NOT NULL DEFAULT '',
+				notes TEXT NOT NULL DEFAULT '',
+				cwes_json TEXT NOT NULL DEFAULT '[]'
+			)`,
+			`CREATE INDEX IF NOT EXISTS kev_entries_sync_id_idx ON kev_entries(sync_id)`,
+			`PRAGMA user_version = 6`,
 		}
 		for _, statement := range statements {
 			if _, err := transaction.ExecContext(ctx, statement); err != nil {
@@ -1165,6 +1212,132 @@ func (d *DB) LatestVulnerabilitySync(ctx context.Context) (VulnerabilitySync, er
 	return result, nil
 }
 
+// SaveKEVCatalog atomically replaces the active CISA KEV catalog. Validation
+// completes before the transaction begins, so malformed input cannot disturb
+// the last known-good local snapshot.
+func (d *DB) SaveKEVCatalog(ctx context.Context, catalog kev.Catalog) (KEVSync, error) {
+	if err := kev.ValidateCatalog(&catalog); err != nil {
+		return KEVSync{}, err
+	}
+	dateReleased, err := time.Parse(time.RFC3339, catalog.DateReleased)
+	if err != nil {
+		return KEVSync{}, fmt.Errorf("parse CISA KEV release time: %w", err)
+	}
+	source := strings.TrimSpace(catalog.SourceURL)
+	if source == "" {
+		source = "CISA KEV"
+	}
+	result := KEVSync{
+		Source: source, CatalogVersion: catalog.CatalogVersion,
+		DateReleased:   dateReleased.UTC(),
+		SynchronizedAt: time.Now().UTC().Truncate(time.Second),
+		Entries:        len(catalog.Vulnerabilities),
+	}
+
+	transaction, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return KEVSync{}, fmt.Errorf("begin CISA KEV snapshot: %w", err)
+	}
+	defer transaction.Rollback()
+	insert, err := transaction.ExecContext(ctx, `INSERT INTO kev_syncs(
+		source, catalog_version, date_released, synchronized_at, entry_count
+	) VALUES (?, ?, ?, ?, ?)`, result.Source, result.CatalogVersion,
+		formatTime(result.DateReleased), formatTime(result.SynchronizedAt), result.Entries)
+	if err != nil {
+		return KEVSync{}, fmt.Errorf("record CISA KEV sync: %w", err)
+	}
+	syncID, err := insert.LastInsertId()
+	if err != nil {
+		return KEVSync{}, fmt.Errorf("read CISA KEV sync ID: %w", err)
+	}
+	if _, err := transaction.ExecContext(ctx, "DELETE FROM kev_syncs WHERE id <> ?", syncID); err != nil {
+		return KEVSync{}, fmt.Errorf("replace CISA KEV snapshot: %w", err)
+	}
+	for _, entry := range catalog.Vulnerabilities {
+		cwesJSON, marshalErr := json.Marshal(nonNilStrings(entry.CWEs))
+		if marshalErr != nil {
+			return KEVSync{}, fmt.Errorf("encode CWEs for %s: %w", entry.CVEID, marshalErr)
+		}
+		if _, err := transaction.ExecContext(ctx, `INSERT INTO kev_entries(
+			cve_id, sync_id, vendor_project, product, vulnerability_name,
+			date_added, short_description, required_action, due_date,
+			known_ransomware_campaign_use, forensic_triage, notes, cwes_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			entry.CVEID, syncID, entry.VendorProject, entry.Product,
+			entry.VulnerabilityName, entry.DateAdded, entry.ShortDescription,
+			entry.RequiredAction, entry.DueDate, entry.KnownRansomwareCampaignUse,
+			entry.ForensicTriage, entry.Notes, string(cwesJSON),
+		); err != nil {
+			return KEVSync{}, fmt.Errorf("store CISA KEV entry %s: %w", entry.CVEID, err)
+		}
+	}
+	if err := transaction.Commit(); err != nil {
+		return KEVSync{}, fmt.Errorf("commit CISA KEV snapshot: %w", err)
+	}
+	return result, nil
+}
+
+// LatestKEVSync returns freshness metadata for the active CISA KEV snapshot.
+func (d *DB) LatestKEVSync(ctx context.Context) (KEVSync, error) {
+	var result KEVSync
+	var dateReleased, synchronizedAt string
+	err := d.db.QueryRowContext(ctx, `SELECT source, catalog_version, date_released,
+		synchronized_at, entry_count FROM kev_syncs ORDER BY id DESC LIMIT 1`).Scan(
+		&result.Source, &result.CatalogVersion, &dateReleased,
+		&synchronizedAt, &result.Entries,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return KEVSync{}, ErrSnapshotNotFound
+	}
+	if err != nil {
+		return KEVSync{}, fmt.Errorf("read latest CISA KEV sync: %w", err)
+	}
+	result.DateReleased, err = parseTime(dateReleased)
+	if err != nil {
+		return KEVSync{}, err
+	}
+	result.SynchronizedAt, err = parseTime(synchronizedAt)
+	if err != nil {
+		return KEVSync{}, err
+	}
+	return result, nil
+}
+
+// ListKEVEntries returns the active catalog in CVE order.
+func (d *DB) ListKEVEntries(ctx context.Context) ([]kev.Vulnerability, error) {
+	rows, err := d.db.QueryContext(ctx, `SELECT cve_id, vendor_project, product,
+		vulnerability_name, date_added, short_description, required_action,
+		due_date, known_ransomware_campaign_use, forensic_triage, notes, cwes_json
+		FROM kev_entries ORDER BY cve_id`)
+	if err != nil {
+		return nil, fmt.Errorf("list CISA KEV entries: %w", err)
+	}
+	defer rows.Close()
+	entries := make([]kev.Vulnerability, 0)
+	for rows.Next() {
+		var entry kev.Vulnerability
+		var cwesJSON string
+		if err := rows.Scan(
+			&entry.CVEID, &entry.VendorProject, &entry.Product,
+			&entry.VulnerabilityName, &entry.DateAdded, &entry.ShortDescription,
+			&entry.RequiredAction, &entry.DueDate,
+			&entry.KnownRansomwareCampaignUse, &entry.ForensicTriage,
+			&entry.Notes, &cwesJSON,
+		); err != nil {
+			return nil, fmt.Errorf("read CISA KEV entry: %w", err)
+		}
+		if err := json.Unmarshal([]byte(cwesJSON), &entry.CWEs); err != nil {
+			return nil, fmt.Errorf("decode CWEs for %s: %w", entry.CVEID, err)
+		}
+		entry.CWEs = nonNilStrings(entry.CWEs)
+		entries = append(entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list CISA KEV entries: %w", err)
+	}
+	return entries, nil
+}
+
 // ReconcileFindings atomically records a local scan and updates the durable
 // finding lifecycle for one release. Missing matches are retained as inactive
 // evidence instead of being deleted.
@@ -1482,7 +1655,35 @@ func (d *DB) ListFindings(ctx context.Context, filter FindingFilter) ([]Finding,
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("list findings: %w", err)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close finding list: %w", err)
+	}
+	entries, err := d.ListKEVEntries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	enrichFindingsWithKEV(findings, entries)
 	return findings, nil
+}
+
+func enrichFindingsWithKEV(findings []Finding, entries []kev.Vulnerability) {
+	byCVE := make(map[string]kev.Vulnerability, len(entries))
+	for _, entry := range entries {
+		byCVE[strings.ToUpper(entry.CVEID)] = entry
+	}
+	for index := range findings {
+		identifiers := append([]string{findings[index].VulnerabilityID}, findings[index].Aliases...)
+		for _, identifier := range identifiers {
+			entry, exists := byCVE[strings.ToUpper(strings.TrimSpace(identifier))]
+			if !exists {
+				continue
+			}
+			findings[index].KnownExploited = true
+			entryCopy := entry
+			findings[index].KEV = &entryCopy
+			break
+		}
+	}
 }
 
 // CreateAssessment appends one human-review decision and updates the

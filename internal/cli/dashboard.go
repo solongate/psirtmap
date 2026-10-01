@@ -45,7 +45,7 @@ var dashboardScreens = []struct {
 	{label: "Releases", hint: "Released product versions"},
 	{label: "Components", hint: "Third-party software inventory"},
 	{label: "Findings", hint: "Durable potential-impact history"},
-	{label: "Scanner", hint: "Local OSV impact check"},
+	{label: "Scanner", hint: "Local impact and KEV prioritization"},
 }
 
 type dashboardInventory struct {
@@ -55,6 +55,7 @@ type dashboardInventory struct {
 	findings    []store.Finding
 	assessments []store.Assessment
 	sync        *store.VulnerabilitySync
+	kevSync     *store.KEVSync
 }
 
 type dashboardInventoryMsg struct {
@@ -73,7 +74,7 @@ type dashboardScanMsg struct {
 }
 
 type dashboardSyncMsg struct {
-	result store.VulnerabilitySync
+	result intelligenceSyncResult
 	err    error
 }
 
@@ -104,25 +105,26 @@ type dashboardForm struct {
 }
 
 type dashboardModel struct {
-	ctx       context.Context
-	database  *store.DB
-	querier   VulnerabilityQuerier
-	width     int
-	height    int
-	screen    dashboardScreen
-	focusMenu bool
-	selected  [screenCount]int
-	data      dashboardInventory
-	loaded    bool
-	loading   bool
-	form      dashboardForm
-	showHelp  bool
-	status    string
-	statusErr bool
-	scanning  bool
-	syncing   bool
-	scan      *scanResult
-	spinner   spinner.Model
+	ctx        context.Context
+	database   *store.DB
+	querier    VulnerabilityQuerier
+	kevFetcher KEVFetcher
+	width      int
+	height     int
+	screen     dashboardScreen
+	focusMenu  bool
+	selected   [screenCount]int
+	data       dashboardInventory
+	loaded     bool
+	loading    bool
+	form       dashboardForm
+	showHelp   bool
+	status     string
+	statusErr  bool
+	scanning   bool
+	syncing    bool
+	scan       *scanResult
+	spinner    spinner.Model
 }
 
 var (
@@ -148,6 +150,7 @@ func runDashboard(
 	stderr io.Writer,
 	database *store.DB,
 	querier VulnerabilityQuerier,
+	kevFetcher KEVFetcher,
 ) int {
 	if len(args) == 1 && isHelp(args[0]) {
 		printDashboardUsage(stdout)
@@ -160,7 +163,7 @@ func runDashboard(
 		return commandError(stderr, errors.New("vulnerability service is unavailable"))
 	}
 
-	model := newDashboardModel(ctx, database, querier)
+	model := newDashboardModel(ctx, database, querier, kevFetcher)
 	program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithOutput(stdout))
 	if _, err := program.Run(); err != nil {
 		return commandError(stderr, fmt.Errorf("run dashboard: %w", err))
@@ -168,21 +171,22 @@ func runDashboard(
 	return 0
 }
 
-func newDashboardModel(ctx context.Context, database *store.DB, querier VulnerabilityQuerier) *dashboardModel {
+func newDashboardModel(ctx context.Context, database *store.DB, querier VulnerabilityQuerier, kevFetcher KEVFetcher) *dashboardModel {
 	loader := spinner.New(
 		spinner.WithSpinner(spinner.MiniDot),
 		spinner.WithStyle(lipgloss.NewStyle().Foreground(colorAccent)),
 	)
 	return &dashboardModel{
-		ctx:       ctx,
-		database:  database,
-		querier:   querier,
-		width:     dashboardDefaultWidth,
-		height:    dashboardDefaultHeight,
-		screen:    screenOverview,
-		focusMenu: true,
-		loading:   true,
-		spinner:   loader,
+		ctx:        ctx,
+		database:   database,
+		querier:    querier,
+		kevFetcher: kevFetcher,
+		width:      dashboardDefaultWidth,
+		height:     dashboardDefaultHeight,
+		screen:     screenOverview,
+		focusMenu:  true,
+		loading:    true,
+		spinner:    loader,
 	}
 }
 
@@ -219,6 +223,12 @@ func (m *dashboardModel) loadInventory() tea.Cmd {
 		latestSync, err := m.database.LatestVulnerabilitySync(m.ctx)
 		if err == nil {
 			inventory.sync = &latestSync
+		} else if !errors.Is(err, store.ErrSnapshotNotFound) {
+			return dashboardInventoryMsg{err: err}
+		}
+		latestKEVSync, err := m.database.LatestKEVSync(m.ctx)
+		if err == nil {
+			inventory.kevSync = &latestKEVSync
 		} else if !errors.Is(err, store.ErrSnapshotNotFound) {
 			return dashboardInventoryMsg{err: err}
 		}
@@ -278,10 +288,14 @@ func (m *dashboardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.setStatus(message.err.Error(), true)
 			return m, nil
 		}
-		m.setStatus(fmt.Sprintf(
-			"OSV snapshot updated: %d packages, %d vulnerabilities",
-			message.result.Packages, message.result.Vulnerabilities,
-		), false)
+		status := fmt.Sprintf(
+			"OSV updated: %d packages, %d vulnerabilities",
+			message.result.OSV.Packages, message.result.OSV.Vulnerabilities,
+		)
+		if message.result.CISAKEV != nil {
+			status += fmt.Sprintf("; CISA KEV: %d entries", message.result.CISAKEV.Entries)
+		}
+		m.setStatus(status, false)
 		return m, m.loadInventory()
 	case spinner.TickMsg:
 		var command tea.Cmd
@@ -618,7 +632,7 @@ func (m *dashboardModel) startScan() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.syncing {
-		m.setStatus("Wait for the OSV snapshot update to finish", false)
+		m.setStatus("Wait for the vulnerability data update to finish", false)
 		return m, nil
 	}
 	if len(m.data.releases) == 0 {
@@ -655,6 +669,9 @@ func (m *dashboardModel) scanRelease(release store.Release) tea.Cmd {
 			}
 		}
 		if err == nil {
+			err = enrichScanResultWithKEV(m.ctx, m.database, &result)
+		}
+		if err == nil {
 			err = persistScanResult(m.ctx, m.database, &result)
 		}
 		return dashboardScanMsg{result: result, err: err}
@@ -670,7 +687,7 @@ func (m *dashboardModel) startSync() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if len(m.data.components) == 0 {
-		m.setStatus("Import an SBOM or add a component before updating OSV data", true)
+		m.setStatus("Import an SBOM or add a component before updating vulnerability data", true)
 		return m, nil
 	}
 	if m.querier == nil {
@@ -678,7 +695,7 @@ func (m *dashboardModel) startSync() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.syncing = true
-	m.setStatus("Updating the local OSV snapshot. This uses the internet...", false)
+	m.setStatus("Updating local OSV and CISA KEV data. This uses the internet...", false)
 	return m, tea.Batch(m.syncSnapshot(), m.spinner.Tick)
 }
 
@@ -688,11 +705,7 @@ func (m *dashboardModel) syncSnapshot() tea.Cmd {
 		if err != nil {
 			return dashboardSyncMsg{err: err}
 		}
-		snapshots, err := queryPackageSnapshots(m.ctx, packages, m.querier)
-		if err != nil {
-			return dashboardSyncMsg{err: err}
-		}
-		result, err := m.database.SaveOSVSnapshot(m.ctx, snapshots)
+		result, err := synchronizeIntelligence(m.ctx, m.database, packages, m.querier, m.kevFetcher)
 		return dashboardSyncMsg{result: result, err: err}
 	}
 }
@@ -931,9 +944,13 @@ func (m *dashboardModel) renderOverview(width, height int) string {
 	} else {
 		lines = append(lines, statusLine("●", "Local OSV snapshot", m.data.sync.SynchronizedAt.Format("2006-01-02 15:04Z"), true))
 	}
+	if m.data.kevSync == nil {
+		lines = append(lines, statusLine("○", "CISA KEV catalog", "NOT SYNCED", false))
+	} else {
+		lines = append(lines, statusLine("●", "CISA KEV catalog", m.data.kevSync.SynchronizedAt.Format("2006-01-02 15:04Z"), true))
+	}
 	if height >= 12 {
 		lines = append(lines,
-			statusLine("○", "CISA KEV enrichment", "PLANNED", false),
 			statusLine("○", "Offline vulnerability feed", "PLANNED", false),
 		)
 	}
@@ -943,7 +960,7 @@ func (m *dashboardModel) renderOverview(width, height int) string {
 			styleTitle.Render("Quick start"),
 			"  1. Press n to create a product",
 			"  2. Open Releases and press i to import its CycloneDX SBOM",
-			"  3. Press u to update local OSV data, then scan the release",
+			"  3. Press u to update local OSV and CISA KEV data, then scan",
 			"  4. Open Findings and press a to record the human decision",
 		)
 	}
@@ -1029,7 +1046,7 @@ func (m *dashboardModel) renderComponents(width, height int) string {
 func (m *dashboardModel) renderFindings(width, height int) string {
 	lines := []string{
 		styleTitle.Render("Findings") + "  " + styleMuted.Render(fmt.Sprintf("%d active", len(m.data.findings))),
-		styleMuted.Render("Vulnerability        Component                    Assessment       Match"),
+		styleMuted.Render("Vulnerability        Component                    KEV  Assessment       Match"),
 	}
 	if len(m.data.findings) == 0 {
 		return strings.Join(append(
@@ -1040,10 +1057,14 @@ func (m *dashboardModel) renderFindings(width, height int) string {
 	rows := visibleRange(len(m.data.findings), m.selected[screenFindings], max(1, height-12))
 	for index := rows.start; index < rows.end; index++ {
 		item := m.data.findings[index]
-		row := fmt.Sprintf("%-20s %-28s %-16s %s",
+		kevStatus := "-"
+		if item.KnownExploited {
+			kevStatus = "YES"
+		}
+		row := fmt.Sprintf("%-20s %-28s %-4s %-16s %s",
 			fitText(item.VulnerabilityID, 20),
 			fitText(item.Component+"@"+item.ComponentVersion, 28),
-			fitText(item.Status, 16), item.MatchStatus,
+			kevStatus, fitText(item.Status, 16), item.MatchStatus,
 		)
 		lines = append(lines, selectableRow(fitText(row, width), index == m.selected[screenFindings]))
 	}
@@ -1053,6 +1074,13 @@ func (m *dashboardModel) renderFindings(width, height int) string {
 			selected.VulnerabilityID, selected.Product, selected.Release,
 			selected.Ecosystem, selected.Component, selected.ComponentVersion),
 	)
+	if selected.KnownExploited && selected.KEV != nil {
+		lines = append(lines,
+			styleWarn.Render("  🔥 CISA KEV: known exploitation"),
+			fitText("  Added: "+selected.KEV.DateAdded+"  •  Due: "+selected.KEV.DueDate+"  •  Ransomware: "+selected.KEV.KnownRansomwareCampaignUse, width),
+			fitText("  Required action: "+oneLine(selected.KEV.RequiredAction), width),
+		)
+	}
 	history := m.assessmentHistory(selected.FindingID)
 	if len(history) == 0 {
 		lines = append(lines,
@@ -1125,6 +1153,7 @@ func (m *dashboardModel) renderScanner(width, height int) string {
 	lines = append(lines,
 		styleTitle.Render(fmt.Sprintf("Last result — %s@%s", m.scan.Product, m.scan.Release)),
 		fmt.Sprintf("%d components checked  •  %s potential findings", m.scan.Components, styleWarn.Render(fmt.Sprintf("%d", len(m.scan.Findings)))),
+		fmt.Sprintf("%s known exploited in CISA KEV", styleWarn.Render(fmt.Sprintf("%d", m.scan.KnownExploited))),
 		fmt.Sprintf("Saved changes: %d new  •  %d existing  •  %d reopened  •  %d no longer matched",
 			m.scan.New, m.scan.Existing, m.scan.Reopened, m.scan.NoLongerMatched),
 	)
@@ -1135,7 +1164,11 @@ func (m *dashboardModel) renderScanner(width, height int) string {
 	available := max(1, height-len(lines)-2)
 	for _, item := range m.scan.Findings[:min(available, len(m.scan.Findings))] {
 		status := strings.ToUpper(strings.ReplaceAll(item.Status, "-", " "))
-		row := fmt.Sprintf("%-18s %-28s %s", fitText(item.ID, 18), fitText(item.Component+"@"+item.ComponentVersion, 28), status)
+		kevStatus := "-"
+		if item.KnownExploited {
+			kevStatus = "KEV"
+		}
+		row := fmt.Sprintf("%-18s %-28s %-4s %s", fitText(item.ID, 18), fitText(item.Component+"@"+item.ComponentVersion, 28), kevStatus, status)
 		lines = append(lines, fitText(row, width))
 	}
 	if len(m.scan.Findings) > available {
@@ -1198,7 +1231,7 @@ func (m *dashboardModel) renderHelp(width int) string {
 		helpRow("i", "Import CycloneDX JSON from Releases"),
 		helpRow("a / Enter", "Assess the selected finding"),
 		helpRow("s / Enter", "Scan the selected release"),
-		helpRow("u", "Update the local OSV snapshot (uses internet)"),
+		helpRow("u", "Update local OSV and CISA KEV data (uses internet)"),
 		helpRow("r", "Refresh local inventory"),
 		helpRow("? / Esc", "Close this help"),
 		helpRow("q", "Quit safely"),

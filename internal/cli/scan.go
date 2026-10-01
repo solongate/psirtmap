@@ -11,6 +11,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/solongate/psirtmap/internal/kev"
 	"github.com/solongate/psirtmap/internal/osv"
 	"github.com/solongate/psirtmap/internal/store"
 )
@@ -18,27 +19,31 @@ import (
 const scanWorkers = 4
 
 type finding struct {
-	ID               string   `json:"id"`
-	Aliases          []string `json:"aliases,omitempty"`
-	Summary          string   `json:"summary,omitempty"`
-	Ecosystem        string   `json:"ecosystem"`
-	Component        string   `json:"component"`
-	ComponentVersion string   `json:"component_version"`
-	Status           string   `json:"status"`
+	ID               string             `json:"id"`
+	Aliases          []string           `json:"aliases,omitempty"`
+	Summary          string             `json:"summary,omitempty"`
+	Ecosystem        string             `json:"ecosystem"`
+	Component        string             `json:"component"`
+	ComponentVersion string             `json:"component_version"`
+	Status           string             `json:"status"`
+	KnownExploited   bool               `json:"known_exploited"`
+	KEV              *kev.Vulnerability `json:"kev,omitempty"`
 }
 
 type scanResult struct {
-	Product         string    `json:"product"`
-	Release         string    `json:"release"`
-	Components      int       `json:"components"`
-	DataSource      string    `json:"data_source"`
-	SynchronizedAt  string    `json:"synchronized_at,omitempty"`
-	Persisted       bool      `json:"persisted"`
-	New             int       `json:"new"`
-	Existing        int       `json:"existing"`
-	Reopened        int       `json:"reopened"`
-	NoLongerMatched int       `json:"no_longer_matched"`
-	Findings        []finding `json:"findings"`
+	Product           string    `json:"product"`
+	Release           string    `json:"release"`
+	Components        int       `json:"components"`
+	DataSource        string    `json:"data_source"`
+	SynchronizedAt    string    `json:"synchronized_at,omitempty"`
+	KEVSynchronizedAt string    `json:"kev_synchronized_at,omitempty"`
+	Persisted         bool      `json:"persisted"`
+	New               int       `json:"new"`
+	Existing          int       `json:"existing"`
+	Reopened          int       `json:"reopened"`
+	NoLongerMatched   int       `json:"no_longer_matched"`
+	KnownExploited    int       `json:"known_exploited"`
+	Findings          []finding `json:"findings"`
 }
 
 type scanOptions struct {
@@ -117,6 +122,9 @@ func runScan(
 	if err != nil {
 		return commandError(stderr, err)
 	}
+	if err := enrichScanResultWithKEV(ctx, database, &result); err != nil {
+		return commandError(stderr, err)
+	}
 	if !options.live {
 		if err := persistScanResult(ctx, database, &result); err != nil {
 			return commandError(stderr, err)
@@ -170,22 +178,65 @@ func persistScanResult(ctx context.Context, database *store.DB, result *scanResu
 		version   string
 		id        string
 	}
-	statuses := make(map[findingIdentity]string, len(saved))
+	type findingState struct {
+		status         string
+		knownExploited bool
+		kev            *kev.Vulnerability
+	}
+	statuses := make(map[findingIdentity]findingState, len(saved))
 	for _, item := range saved {
 		statuses[findingIdentity{
 			ecosystem: item.Ecosystem, component: item.Component,
 			version: item.ComponentVersion, id: item.VulnerabilityID,
-		}] = item.Status
+		}] = findingState{status: item.Status, knownExploited: item.KnownExploited, kev: item.KEV}
 	}
 	for index := range result.Findings {
 		item := &result.Findings[index]
-		if status, ok := statuses[findingIdentity{
+		if state, ok := statuses[findingIdentity{
 			ecosystem: item.Ecosystem, component: item.Component,
 			version: item.ComponentVersion, id: item.ID,
 		}]; ok {
-			item.Status = status
+			item.Status = state.status
+			item.KnownExploited = state.knownExploited
+			item.KEV = state.kev
 		}
 	}
+	return nil
+}
+
+func enrichScanResultWithKEV(ctx context.Context, database *store.DB, result *scanResult) error {
+	entries, err := database.ListKEVEntries(ctx)
+	if err != nil {
+		return err
+	}
+	byCVE := make(map[string]kev.Vulnerability, len(entries))
+	for _, entry := range entries {
+		byCVE[strings.ToUpper(entry.CVEID)] = entry
+	}
+	result.KnownExploited = 0
+	for index := range result.Findings {
+		item := &result.Findings[index]
+		identifiers := append([]string{item.ID}, item.Aliases...)
+		for _, identifier := range identifiers {
+			entry, exists := byCVE[strings.ToUpper(strings.TrimSpace(identifier))]
+			if !exists {
+				continue
+			}
+			item.KnownExploited = true
+			entryCopy := entry
+			item.KEV = &entryCopy
+			result.KnownExploited++
+			break
+		}
+	}
+	sync, err := database.LatestKEVSync(ctx)
+	if errors.Is(err, store.ErrSnapshotNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	result.KEVSynchronizedAt = sync.SynchronizedAt.Format(time.RFC3339)
 	return nil
 }
 
@@ -382,6 +433,9 @@ func printScanText(stdout io.Writer, stderr io.Writer, result scanResult) int {
 	}
 	fmt.Fprintf(stdout, "COMPONENTS\n%d\n\n", result.Components)
 	fmt.Fprintf(stdout, "POTENTIAL FINDINGS\n%d\n", len(result.Findings))
+	if result.KEVSynchronizedAt != "" {
+		fmt.Fprintf(stdout, "Known exploited  %d  (CISA KEV %s)\n", result.KnownExploited, result.KEVSynchronizedAt)
+	}
 	if result.Persisted {
 		fmt.Fprintln(stdout, "\nFINDING CHANGES")
 		fmt.Fprintf(stdout, "New %d  Existing %d  Reopened %d  No longer matched %d\n",
@@ -397,13 +451,18 @@ func printScanText(stdout io.Writer, stderr io.Writer, result scanResult) int {
 
 	fmt.Fprintln(stdout)
 	table := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(table, "ID\tECOSYSTEM\tCOMPONENT\tSTATUS")
+	fmt.Fprintln(table, "ID\tECOSYSTEM\tCOMPONENT\tKEV\tSTATUS")
 	for _, item := range result.Findings {
-		fmt.Fprintf(table, "%s\t%s\t%s@%s\t%s\n",
+		kevStatus := "-"
+		if item.KnownExploited {
+			kevStatus = "YES"
+		}
+		fmt.Fprintf(table, "%s\t%s\t%s@%s\t%s\t%s\n",
 			oneLine(item.ID),
 			item.Ecosystem,
 			item.Component,
 			item.ComponentVersion,
+			kevStatus,
 			item.Status,
 		)
 	}

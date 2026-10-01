@@ -20,7 +20,7 @@ ordered so every release remains small, testable, and useful on its own.
 | Local vulnerability data | Sync OSV data and scan from a local snapshot | Shipped in `v0.0.5` |
 | Finding lifecycle | Persist matches and track what changed | Shipped in `v0.0.6` |
 | Human assessment | Record impact decisions and evidence | Shipped in `v0.0.7` |
-| KEV enrichment | Prioritize known exploitation | Planned |
+| KEV enrichment | Prioritize known exploitation | Shipped in `v0.0.8` |
 | Offline feeds | Scan from validated, transferable feed bundles | Planned |
 | VEX | Export human assessments in a machine-readable format | Later |
 
@@ -87,22 +87,29 @@ range evaluation remain part of the offline-feed milestone.
 - Re-scanning updates match evidence without resetting the human decision.
 - The CLI and terminal dashboard both expose the current state and history.
 
-## Next prioritization and operator work
+## Shipped: CISA KEV enrichment
 
-Development now proceeds in this order.
+`v0.0.8` adds a second, independent prioritization source:
 
-### 1. CISA KEV enrichment
+- `psirtmap sync` downloads and validates the official CISA KEV catalog.
+- The catalog is stored locally with its source, version, release time, and
+  synchronization time.
+- Findings match KEV entries through either their primary identifier or CVE
+  aliases.
+- The CLI and dashboard show known-exploitation status and feed freshness.
+- KEV remains prioritization context, not proof that a product is affected.
+- A failed or malformed update cannot replace the last known-good catalog.
 
-- Download and normalize the official KEV catalog.
-- Mark findings with known exploitation.
-- Display source and feed freshness.
-- Treat KEV as prioritization context—not proof that a product is affected.
+## Next: transferable offline feeds
 
-### 2. Stable operator workflow
+The next milestone makes the synchronized intelligence portable to a machine
+that never connects to the internet:
 
-- Expose KEV consistently in the dashboard and scriptable CLI.
-- Add safe database backup and migration guidance.
-- Publish end-to-end demo data and operator documentation.
+- `psirtmap feed pull` on a connected machine.
+- `psirtmap feed export` to create a versioned, checksummed bundle.
+- `psirtmap feed import` after a controlled transfer into the isolated network.
+- Complete validation before imported data becomes active.
+- Clear provenance, freshness, and staleness reporting.
 
 ## Offline and air-gapped operation
 

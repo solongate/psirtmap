@@ -62,11 +62,15 @@ func runFindings(
 	}
 
 	table := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(table, "ID\tPRODUCT RELEASE\tCOMPONENT\tASSESSMENT\tMATCH\tFIRST SEEN\tLAST SEEN")
+	fmt.Fprintln(table, "ID\tPRODUCT RELEASE\tCOMPONENT\tKEV\tASSESSMENT\tMATCH\tFIRST SEEN\tLAST SEEN")
 	for _, item := range findings {
-		fmt.Fprintf(table, "%s\t%s@%s\t%s:%s@%s\t%s\t%s\t%s\t%s\n",
+		kevStatus := "-"
+		if item.KnownExploited {
+			kevStatus = "YES"
+		}
+		fmt.Fprintf(table, "%s\t%s@%s\t%s:%s@%s\t%s\t%s\t%s\t%s\t%s\n",
 			oneLine(item.VulnerabilityID), item.Product, item.Release,
-			item.Ecosystem, item.Component, item.ComponentVersion, item.Status, item.MatchStatus,
+			item.Ecosystem, item.Component, item.ComponentVersion, kevStatus, item.Status, item.MatchStatus,
 			item.FirstSeenAt.Format("2006-01-02 15:04Z"),
 			item.LastSeenAt.Format("2006-01-02 15:04Z"),
 		)

@@ -6,6 +6,28 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-10-01
+
+### Added
+
+- CISA Known Exploited Vulnerabilities catalog synchronization from CISA's
+  canonical feed with its official GitHub mirror as a fallback.
+- Strict catalog validation, deterministic normalization, response-size
+  limits, and last-known-good local snapshot preservation.
+- Local KEV catalog metadata and entries in SQLite.
+- Alias-aware KEV enrichment for scan results and durable findings.
+- Known-exploitation counts, feed freshness, required actions, due dates, and
+  ransomware-use signals in the CLI and terminal dashboard.
+- Unit, database lifecycle, and CLI workflow coverage for KEV data.
+
+### Changed
+
+- `psirtmap sync` now updates both inventory-scoped OSV data and the complete
+  CISA KEV catalog.
+- Database schema migrated to version 6 without changing inventory, OSV data,
+  findings, scan audits, or assessment history.
+- Version advanced to `0.0.8`.
+
 ## [0.0.7] - 2026-10-01
 
 ### Added
@@ -143,7 +165,8 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Human-readable and JSON output.
 - Automated tests, cross-platform release builds, and Apache-2.0 licensing.
 
-[Unreleased]: https://github.com/solongate/psirtmap/compare/v0.0.7...HEAD
+[Unreleased]: https://github.com/solongate/psirtmap/compare/v0.0.8...HEAD
+[0.0.8]: https://github.com/solongate/psirtmap/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/solongate/psirtmap/compare/v0.0.6...v0.0.7
 [0.0.6]: https://github.com/solongate/psirtmap/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/solongate/psirtmap/compare/v0.0.4...v0.0.5

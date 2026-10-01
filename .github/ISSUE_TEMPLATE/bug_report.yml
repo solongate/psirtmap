@@ -12,7 +12,7 @@ body:
     attributes:
       label: PSIRTMap version
       description: Run `psirtmap version` and paste the result.
-      placeholder: 0.0.7
+      placeholder: 0.0.8
     validations:
       required: true
 

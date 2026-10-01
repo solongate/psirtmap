@@ -10,15 +10,21 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/solongate/psirtmap/internal/kev"
 	"github.com/solongate/psirtmap/internal/osv"
 	"github.com/solongate/psirtmap/internal/store"
 )
 
-const version = "0.0.7"
+const version = "0.0.8"
 
 // VulnerabilityQuerier is implemented by the OSV client.
 type VulnerabilityQuerier interface {
 	Query(context.Context, osv.Package, string) ([]osv.Vulnerability, error)
+}
+
+// KEVFetcher is implemented by the CISA KEV client.
+type KEVFetcher interface {
+	Fetch(context.Context) (kev.Catalog, error)
 }
 
 type globalOptions struct {
@@ -32,6 +38,19 @@ func Run(
 	stdout io.Writer,
 	stderr io.Writer,
 	querier VulnerabilityQuerier,
+) int {
+	return RunWithSources(ctx, args, stdout, stderr, querier, nil)
+}
+
+// RunWithSources executes the CLI with both vulnerability-intelligence
+// sources. Run remains available for embedders that only configure OSV.
+func RunWithSources(
+	ctx context.Context,
+	args []string,
+	stdout io.Writer,
+	stderr io.Writer,
+	querier VulnerabilityQuerier,
+	kevFetcher KEVFetcher,
 ) int {
 	options, remaining, err := parseGlobalOptions(args)
 	if err != nil {
@@ -49,7 +68,7 @@ func Run(
 		if printRequestedInventoryHelp(remaining, stdout) {
 			return 0
 		}
-		return runInventoryCommand(ctx, remaining, stdout, stderr, querier, options.databasePath)
+		return runInventoryCommand(ctx, remaining, stdout, stderr, querier, kevFetcher, options.databasePath)
 	case "help", "--help", "-h":
 		printUsage(stdout)
 		return 0
@@ -153,6 +172,7 @@ func runInventoryCommand(
 	stdout io.Writer,
 	stderr io.Writer,
 	querier VulnerabilityQuerier,
+	kevFetcher KEVFetcher,
 	databasePath string,
 ) int {
 	database, err := store.Open(ctx, databasePath)
@@ -174,13 +194,13 @@ func runInventoryCommand(
 	case "scan":
 		return runScan(ctx, args[1:], stdout, stderr, database, querier)
 	case "sync":
-		return runSync(ctx, args[1:], stdout, stderr, database, querier)
+		return runSync(ctx, args[1:], stdout, stderr, database, querier, kevFetcher)
 	case "findings":
 		return runFindings(ctx, args[1:], stdout, stderr, database)
 	case "assess":
 		return runAssess(ctx, args[1:], stdout, stderr, database)
 	case "dashboard", "ui":
-		return runDashboard(ctx, args[1:], stdout, stderr, database, querier)
+		return runDashboard(ctx, args[1:], stdout, stderr, database, querier, kevFetcher)
 	default:
 		panic("unreachable inventory command")
 	}

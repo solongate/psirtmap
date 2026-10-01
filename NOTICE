@@ -2,3 +2,11 @@ PSIRTMap
 Copyright 2026 SolonGate
 
 This product includes software developed by SolonGate.
+
+PSIRTMap can download the CISA Known Exploited Vulnerabilities catalog at
+runtime. CISA distributes that data under the Creative Commons CC0 1.0
+Universal dedication. Use of the data does not authorize use of the CISA logo
+or DHS seal and does not imply endorsement by CISA or DHS.
+
+Source: https://www.cisa.gov/known-exploited-vulnerabilities-catalog
+License: https://github.com/cisagov/kev-data/blob/develop/LICENSE

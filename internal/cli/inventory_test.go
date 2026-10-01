@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/solongate/psirtmap/internal/cli"
+	"github.com/solongate/psirtmap/internal/kev"
 	"github.com/solongate/psirtmap/internal/osv"
 )
 
@@ -25,6 +26,17 @@ type inventoryQuerier struct {
 	mu      sync.Mutex
 	results map[string]packageResult
 	calls   []string
+}
+
+type inventoryKEVFetcher struct {
+	catalog kev.Catalog
+	err     error
+	calls   int
+}
+
+func (f *inventoryKEVFetcher) Fetch(_ context.Context) (kev.Catalog, error) {
+	f.calls++
+	return f.catalog, f.err
 }
 
 func (q *inventoryQuerier) Query(_ context.Context, pkg osv.Package, version string) ([]osv.Vulnerability, error) {
@@ -47,6 +59,23 @@ func runWithDatabase(
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	exitCode := cli.Run(context.Background(), arguments, &stdout, &stderr, querier)
+	return exitCode, stdout.String(), stderr.String()
+}
+
+func runWithSourcesDatabase(
+	t *testing.T,
+	databasePath string,
+	querier cli.VulnerabilityQuerier,
+	kevFetcher cli.KEVFetcher,
+	args ...string,
+) (int, string, string) {
+	t.Helper()
+	arguments := append([]string{"--database", databasePath}, args...)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := cli.RunWithSources(
+		context.Background(), arguments, &stdout, &stderr, querier, kevFetcher,
+	)
 	return exitCode, stdout.String(), stderr.String()
 }
 
@@ -137,6 +166,133 @@ func TestInventoryCLIWorkflowAndScan(t *testing.T) {
 	querier.mu.Unlock()
 	if len(calls) != 2 {
 		t.Fatalf("OSV calls = %v, want 2", calls)
+	}
+}
+
+func TestCISAKEVSyncEnrichesScanAndPersistedFindings(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "psirtmap.db")
+	querier := &inventoryQuerier{results: map[string]packageResult{
+		"Alpine:openssl@3.0.8": {vulnerabilities: []osv.Vulnerability{{
+			ID:      "GHSA-TEST-0001",
+			Aliases: []string{"CVE-2026-12345"},
+			Summary: "OpenSSL test vulnerability",
+		}}},
+	}}
+	kevFetcher := &inventoryKEVFetcher{catalog: kev.Catalog{
+		CatalogVersion: "2026.10.01",
+		DateReleased:   "2026-10-01T12:00:00Z",
+		Count:          1,
+		SourceURL:      "https://www.cisa.gov/test-kev.json",
+		Vulnerabilities: []kev.Vulnerability{{
+			CVEID:                      "CVE-2026-12345",
+			VendorProject:              "OpenSSL",
+			Product:                    "OpenSSL",
+			VulnerabilityName:          "OpenSSL test vulnerability",
+			DateAdded:                  "2026-10-01",
+			ShortDescription:           "Known exploitation test record.",
+			RequiredAction:             "Apply vendor mitigations.",
+			DueDate:                    "2026-10-22",
+			KnownRansomwareCampaignUse: "Known",
+			CWEs:                       []string{"CWE-787"},
+		}},
+	}}
+
+	for _, arguments := range [][]string{
+		{"product", "add", "Gateway"},
+		{"release", "add", "Gateway", "1.0"},
+		{"component", "add", "Gateway@1.0", "openssl@3.0.8", "--ecosystem", "Alpine"},
+	} {
+		exitCode, _, stderr := runWithSourcesDatabase(t, path, querier, kevFetcher, arguments...)
+		requireSuccess(t, exitCode, stderr)
+	}
+
+	exitCode, stdout, stderr := runWithSourcesDatabase(t, path, querier, kevFetcher, "sync")
+	requireSuccess(t, exitCode, stderr)
+	for _, expected := range []string{"OSV              ready", "CISA KEV         ready", "KEV entries      1"} {
+		if !strings.Contains(stdout, expected) {
+			t.Errorf("sync stdout = %q, want %q", stdout, expected)
+		}
+	}
+	if kevFetcher.calls != 1 {
+		t.Fatalf("KEV fetch calls = %d, want 1", kevFetcher.calls)
+	}
+
+	exitCode, stdout, stderr = runWithSourcesDatabase(t, path, querier, kevFetcher, "scan", "Gateway@1.0")
+	requireSuccess(t, exitCode, stderr)
+	for _, expected := range []string{"Known exploited  1", "GHSA-TEST-0001", "YES"} {
+		if !strings.Contains(stdout, expected) {
+			t.Errorf("scan stdout = %q, want %q", stdout, expected)
+		}
+	}
+
+	exitCode, stdout, stderr = runWithSourcesDatabase(
+		t, path, querier, kevFetcher, "findings", "Gateway@1.0", "--json",
+	)
+	requireSuccess(t, exitCode, stderr)
+	var findings []struct {
+		ID             string             `json:"id"`
+		KnownExploited bool               `json:"known_exploited"`
+		KEV            *kev.Vulnerability `json:"kev"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &findings); err != nil {
+		t.Fatalf("decode findings JSON %q: %v", stdout, err)
+	}
+	if len(findings) != 1 || findings[0].ID != "GHSA-TEST-0001" ||
+		!findings[0].KnownExploited || findings[0].KEV == nil ||
+		findings[0].KEV.CVEID != "CVE-2026-12345" {
+		t.Fatalf("KEV-enriched findings = %+v", findings)
+	}
+}
+
+func TestCISAKEVFailurePreservesLastSuccessfulIntelligence(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "psirtmap.db")
+	querier := &inventoryQuerier{results: map[string]packageResult{
+		"npm:pkg@1.0": {vulnerabilities: []osv.Vulnerability{{
+			ID: "CVE-2026-11111",
+		}}},
+	}}
+	kevFetcher := &inventoryKEVFetcher{catalog: kev.Catalog{
+		CatalogVersion: "1",
+		DateReleased:   "2026-10-01T12:00:00Z",
+		Count:          1,
+		Vulnerabilities: []kev.Vulnerability{{
+			CVEID:             "CVE-2026-11111",
+			VendorProject:     "Vendor",
+			Product:           "Package",
+			VulnerabilityName: "Known exploited test",
+			DateAdded:         "2026-10-01",
+			ShortDescription:  "Test record.",
+			RequiredAction:    "Apply mitigations.",
+			DueDate:           "2026-10-22",
+		}},
+	}}
+	for _, arguments := range [][]string{
+		{"product", "add", "Gateway"},
+		{"release", "add", "Gateway", "1.0"},
+		{"component", "add", "Gateway@1.0", "pkg@1.0", "--ecosystem", "npm"},
+		{"sync"},
+	} {
+		exitCode, _, stderr := runWithSourcesDatabase(t, path, querier, kevFetcher, arguments...)
+		requireSuccess(t, exitCode, stderr)
+	}
+
+	querier.mu.Lock()
+	querier.results["npm:pkg@1.0"] = packageResult{vulnerabilities: []osv.Vulnerability{{ID: "CVE-2026-22222"}}}
+	querier.mu.Unlock()
+	kevFetcher.err = errors.New("CISA unavailable")
+
+	exitCode, _, stderr := runWithSourcesDatabase(t, path, querier, kevFetcher, "sync")
+	if exitCode != 1 || !strings.Contains(stderr, "CISA unavailable") {
+		t.Fatalf("failed sync = code %d, stderr %q", exitCode, stderr)
+	}
+	exitCode, stdout, stderr := runWithSourcesDatabase(t, path, querier, kevFetcher, "scan", "Gateway@1.0")
+	requireSuccess(t, exitCode, stderr)
+	if !strings.Contains(stdout, "CVE-2026-11111") || !strings.Contains(stdout, "YES") || strings.Contains(stdout, "CVE-2026-22222") {
+		t.Fatalf("scan after failed KEV update = %q", stdout)
 	}
 }
 
@@ -617,7 +773,7 @@ func TestRootCommandsAndUsageErrors(t *testing.T) {
 		useStderr  bool
 	}{
 		{name: "root help", args: []string{"--help"}, wantCode: 0, wantOutput: "Inventory commands:"},
-		{name: "version", args: []string{"version"}, wantCode: 0, wantOutput: "0.0.7"},
+		{name: "version", args: []string{"version"}, wantCode: 0, wantOutput: "0.0.8"},
 		{name: "unknown", args: []string{"wat"}, wantCode: 2, wantOutput: "unknown command", useStderr: true},
 		{name: "missing database value", args: []string{"--database"}, wantCode: 2, wantOutput: "requires a value", useStderr: true},
 	}
