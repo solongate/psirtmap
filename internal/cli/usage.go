@@ -20,6 +20,7 @@ Inventory commands:
   release     Add, import, and list product releases
   component   Add and list release components
   sync        Update local OSV and CISA KEV vulnerability intelligence
+  feed        Pull, export, and import transferable offline feed bundles
   scan        Match a release and prioritize findings with local KEV data
   findings    List durable potential-impact findings
   assess      Record and inspect human impact decisions
@@ -117,6 +118,24 @@ Sync queries OSV for every distinct package version and downloads the CISA
 Known Exploited Vulnerabilities catalog. It requires internet access. Downloads
 and validation complete before new source snapshots are committed; malformed or
 failed updates leave the previous local data available.`)
+}
+
+func printFeedUsage(writer io.Writer) {
+	fmt.Fprintln(writer, `Transfer vulnerability intelligence into a disconnected environment.
+
+Usage:
+  psirtmap [--database <path>] feed pull [--json]
+  psirtmap [--database <path>] feed export [output.bundle] [--json]
+  psirtmap [--database <path>] feed import <input.bundle> [--json]
+
+"feed pull" downloads inventory-scoped OSV matches and the complete CISA KEV
+catalog on an internet-connected machine. "feed export" packages the active
+snapshots into a versioned ZIP bundle with per-file SHA-256 checksums. After a
+controlled transfer, "feed import" validates the complete bundle before
+atomically replacing both snapshots in the isolated database.
+
+Checksums detect accidental corruption; they do not authenticate who created a
+bundle. Accept bundles only through your organization's trusted transfer path.`)
 }
 
 func printFindingsUsage(writer io.Writer) {

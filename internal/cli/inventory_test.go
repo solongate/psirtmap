@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/solongate/psirtmap/internal/cli"
 	"github.com/solongate/psirtmap/internal/kev"
@@ -293,6 +294,76 @@ func TestCISAKEVFailurePreservesLastSuccessfulIntelligence(t *testing.T) {
 	requireSuccess(t, exitCode, stderr)
 	if !strings.Contains(stdout, "CVE-2026-11111") || !strings.Contains(stdout, "YES") || strings.Contains(stdout, "CVE-2026-22222") {
 		t.Fatalf("scan after failed KEV update = %q", stdout)
+	}
+}
+
+func TestOfflineFeedExportImportWorkflow(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	sourceDB := filepath.Join(directory, "connected.db")
+	targetDB := filepath.Join(directory, "isolated.db")
+	bundlePath := filepath.Join(directory, "transfer.bundle")
+	querier := &inventoryQuerier{results: map[string]packageResult{
+		"npm:demo@1.0.0": {vulnerabilities: []osv.Vulnerability{{
+			ID: "GHSA-DEMO-2026", Aliases: []string{"CVE-2026-12345"},
+			Summary: "Portable test vulnerability",
+		}}},
+	}}
+	kevFetcher := &inventoryKEVFetcher{catalog: kev.Catalog{
+		CatalogVersion: "2026.10.01",
+		DateReleased:   time.Now().UTC().Add(-time.Hour).Format(time.RFC3339),
+		Count:          1,
+		Vulnerabilities: []kev.Vulnerability{{
+			CVEID: "CVE-2026-12345", VendorProject: "Example", Product: "Demo",
+			VulnerabilityName: "Portable test vulnerability", DateAdded: "2026-09-01",
+			ShortDescription: "Example", RequiredAction: "Apply update",
+			DueDate: "2026-10-01",
+		}},
+		SourceURL: "https://example.test/kev.json",
+	}}
+
+	for _, command := range [][]string{
+		{"product", "add", "gateway"},
+		{"release", "add", "gateway", "1.0"},
+		{"component", "add", "gateway@1.0", "demo@1.0.0", "--ecosystem", "npm"},
+	} {
+		exitCode, _, stderr := runWithSourcesDatabase(t, sourceDB, querier, kevFetcher, command...)
+		requireSuccess(t, exitCode, stderr)
+	}
+	exitCode, stdout, stderr := runWithSourcesDatabase(t, sourceDB, querier, kevFetcher, "feed", "pull")
+	requireSuccess(t, exitCode, stderr)
+	if !strings.Contains(stdout, "CISA KEV         ready") {
+		t.Fatalf("feed pull stdout = %q", stdout)
+	}
+	exitCode, stdout, stderr = runWithSourcesDatabase(t, sourceDB, nil, nil, "feed", "export", bundlePath)
+	requireSuccess(t, exitCode, stderr)
+	for _, expected := range []string{"OFFLINE FEED EXPORTED", "Packages         1", "Vulnerabilities  1", "KEV entries      1"} {
+		if !strings.Contains(stdout, expected) {
+			t.Errorf("feed export stdout = %q, want %q", stdout, expected)
+		}
+	}
+
+	for _, command := range [][]string{
+		{"product", "add", "gateway"},
+		{"release", "add", "gateway", "1.0"},
+		{"component", "add", "gateway@1.0", "demo@1.0.0", "--ecosystem", "npm"},
+	} {
+		exitCode, _, stderr = runWithSourcesDatabase(t, targetDB, nil, nil, command...)
+		requireSuccess(t, exitCode, stderr)
+	}
+	exitCode, stdout, stderr = runWithSourcesDatabase(t, targetDB, nil, nil, "feed", "import", bundlePath)
+	requireSuccess(t, exitCode, stderr)
+	for _, expected := range []string{"OFFLINE FEED IMPORTED", "SHA-256 checksums verified", "Packages         1", "KEV entries      1"} {
+		if !strings.Contains(stdout, expected) {
+			t.Errorf("feed import stdout = %q, want %q", stdout, expected)
+		}
+	}
+	exitCode, stdout, stderr = runWithSourcesDatabase(t, targetDB, nil, nil, "scan", "gateway@1.0")
+	requireSuccess(t, exitCode, stderr)
+	for _, expected := range []string{"GHSA-DEMO-2026", "Known exploited  1", "YES"} {
+		if !strings.Contains(stdout, expected) {
+			t.Errorf("offline scan stdout = %q, want %q", stdout, expected)
+		}
 	}
 }
 
@@ -745,7 +816,7 @@ func TestGlobalDatabaseOptionValidation(t *testing.T) {
 func TestInventoryHelpDoesNotCreateDatabase(t *testing.T) {
 	t.Parallel()
 
-	for _, command := range []string{"init", "product", "release", "component", "sync", "scan", "findings", "assess", "dashboard", "ui"} {
+	for _, command := range []string{"init", "product", "release", "component", "sync", "feed", "scan", "findings", "assess", "dashboard", "ui"} {
 		command := command
 		t.Run(command, func(t *testing.T) {
 			t.Parallel()
@@ -773,7 +844,7 @@ func TestRootCommandsAndUsageErrors(t *testing.T) {
 		useStderr  bool
 	}{
 		{name: "root help", args: []string{"--help"}, wantCode: 0, wantOutput: "Inventory commands:"},
-		{name: "version", args: []string{"version"}, wantCode: 0, wantOutput: "0.0.8"},
+		{name: "version", args: []string{"version"}, wantCode: 0, wantOutput: "0.0.9"},
 		{name: "unknown", args: []string{"wat"}, wantCode: 2, wantOutput: "unknown command", useStderr: true},
 		{name: "missing database value", args: []string{"--database"}, wantCode: 2, wantOutput: "requires a value", useStderr: true},
 	}

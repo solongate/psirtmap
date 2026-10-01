@@ -50,3 +50,14 @@ security engineer's exploitability assessment.
 Reports about an upstream package or an OSV record, without a vulnerability in
 PSIRTMap itself, should be sent to the relevant upstream project or data
 provider.
+
+## Offline feed trust
+
+PSIRTMap feed bundles use strict structure validation and SHA-256 checksums to
+detect truncation and accidental modification. These checksums are stored in
+the bundle itself and therefore do not authenticate the bundle's creator.
+
+Until signed bundles and trusted-key policy are available, import feed bundles
+only through an approved transfer process from a staging machine you control.
+Treat an unexpected checksum failure, manifest error, or source timestamp as a
+reason to reject the bundle and investigate the transfer path.

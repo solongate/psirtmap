@@ -1010,3 +1010,96 @@ func TestSchemaVersionThreeMigratesWithoutLosingLocalSnapshot(t *testing.T) {
 		t.Fatalf("schema version = %d, want %d", version, schemaVersion)
 	}
 }
+
+func TestFeedImportIsAtomicAndRecordsProvenance(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	database, err := Open(ctx, filepath.Join(t.TempDir(), "feed.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	oldPackage := PackageVersion{Ecosystem: "npm", Name: "old", Version: "1.0.0"}
+	if _, err := database.SaveOSVSnapshot(ctx, []PackageSnapshot{{
+		Package: oldPackage, Vulnerabilities: []osv.Vulnerability{{ID: "OSV-OLD"}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.SaveKEVCatalog(ctx, testFeedCatalog("old", "CVE-2025-1000")); err != nil {
+		t.Fatal(err)
+	}
+
+	synchronizedAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	newPackage := PackageVersion{Ecosystem: "npm", Name: "new", Version: "2.0.0"}
+	snapshot := IntelligenceSnapshot{
+		OSVSync: VulnerabilitySync{
+			Source: "OSV", SynchronizedAt: synchronizedAt, Packages: 1, Vulnerabilities: 1,
+		},
+		Packages: []PackageSnapshot{{
+			Package:         newPackage,
+			Vulnerabilities: []osv.Vulnerability{{ID: "OSV-NEW", Aliases: []string{"CVE-2026-12345"}}},
+		}},
+		KEVSync: KEVSync{
+			Source: "https://example.test/kev.json", CatalogVersion: "new",
+			DateReleased: synchronizedAt, SynchronizedAt: synchronizedAt, Entries: 1,
+		},
+		KEVEntries: testFeedCatalog("new", "CVE-2026-12345").Vulnerabilities,
+	}
+	metadata := FeedImportMetadata{
+		FormatVersion: 1, BundleCreatedAt: synchronizedAt.Add(time.Minute),
+		SourceName: "transfer.bundle", ManifestSHA256: strings.Repeat("a", 64),
+	}
+	if _, err := database.db.ExecContext(ctx, `CREATE TRIGGER fail_feed_import
+		BEFORE INSERT ON kev_syncs WHEN NEW.catalog_version = 'new'
+		BEGIN SELECT RAISE(ABORT, 'forced import failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ImportIntelligence(ctx, snapshot, metadata); err == nil {
+		t.Fatal("ImportIntelligence() error = nil, want forced failure")
+	}
+	oldMatches, _, err := database.LookupOSVSnapshot(ctx, oldPackage)
+	if err != nil || len(oldMatches) != 1 || oldMatches[0].ID != "OSV-OLD" {
+		t.Fatalf("OSV snapshot after rollback = %+v, %v", oldMatches, err)
+	}
+	oldKEV, err := database.LatestKEVSync(ctx)
+	if err != nil || oldKEV.CatalogVersion != "old" {
+		t.Fatalf("KEV snapshot after rollback = %+v, %v", oldKEV, err)
+	}
+	if _, err := database.LatestFeedImport(ctx); !errors.Is(err, ErrSnapshotNotFound) {
+		t.Fatalf("feed import after rollback error = %v", err)
+	}
+	if _, err := database.db.ExecContext(ctx, "DROP TRIGGER fail_feed_import"); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := database.ImportIntelligence(ctx, snapshot, metadata)
+	if err != nil {
+		t.Fatalf("ImportIntelligence() error = %v", err)
+	}
+	if result.Packages != 1 || result.Vulnerabilities != 1 || result.KEVEntries != 1 {
+		t.Fatalf("ImportIntelligence() = %+v", result)
+	}
+	newMatches, gotSynchronizedAt, err := database.LookupOSVSnapshot(ctx, newPackage)
+	if err != nil || len(newMatches) != 1 || newMatches[0].ID != "OSV-NEW" || !gotSynchronizedAt.Equal(synchronizedAt) {
+		t.Fatalf("imported OSV snapshot = %+v, %v, %v", newMatches, gotSynchronizedAt, err)
+	}
+	provenance, err := database.LatestFeedImport(ctx)
+	if err != nil || provenance.SourceName != metadata.SourceName || provenance.ManifestSHA256 != metadata.ManifestSHA256 {
+		t.Fatalf("LatestFeedImport() = %+v, %v", provenance, err)
+	}
+}
+
+func testFeedCatalog(version, cveID string) kev.Catalog {
+	return kev.Catalog{
+		CatalogVersion: version,
+		DateReleased:   time.Now().UTC().Add(-time.Hour).Format(time.RFC3339),
+		Count:          1,
+		SourceURL:      "https://example.test/kev.json",
+		Vulnerabilities: []kev.Vulnerability{{
+			CVEID: cveID, VendorProject: "Example", Product: "Demo",
+			VulnerabilityName: "Example vulnerability", DateAdded: "2026-09-01",
+			ShortDescription: "Example", RequiredAction: "Apply update",
+			DueDate: "2026-10-01",
+		}},
+	}
+}

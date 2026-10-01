@@ -20,7 +20,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 6
+const schemaVersion = 7
 
 const (
 	AssessmentNeedsReview   = "needs-review"
@@ -118,8 +118,8 @@ type PackageVersion struct {
 
 // PackageSnapshot contains the exact OSV query result for one package version.
 type PackageSnapshot struct {
-	Package         PackageVersion
-	Vulnerabilities []osv.Vulnerability
+	Package         PackageVersion      `json:"package"`
+	Vulnerabilities []osv.Vulnerability `json:"vulnerabilities"`
 }
 
 // VulnerabilitySync summarizes one successfully committed local snapshot.
@@ -519,6 +519,31 @@ func (d *DB) migrate(ctx context.Context) error {
 			)`,
 			`CREATE INDEX IF NOT EXISTS kev_entries_sync_id_idx ON kev_entries(sync_id)`,
 			`PRAGMA user_version = 6`,
+		}
+		for _, statement := range statements {
+			if _, err := transaction.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("apply schema migration: %w", err)
+			}
+		}
+	}
+
+	if currentVersion < 7 {
+		statements := []string{
+			`CREATE TABLE IF NOT EXISTS feed_imports (
+				id INTEGER PRIMARY KEY,
+				format_version INTEGER NOT NULL,
+				bundle_created_at TEXT NOT NULL,
+				imported_at TEXT NOT NULL,
+				source_name TEXT NOT NULL,
+				manifest_sha256 TEXT NOT NULL,
+				osv_synchronized_at TEXT NOT NULL,
+				kev_synchronized_at TEXT NOT NULL,
+				package_count INTEGER NOT NULL,
+				vulnerability_count INTEGER NOT NULL,
+				kev_entry_count INTEGER NOT NULL
+			)`,
+			`CREATE INDEX IF NOT EXISTS feed_imports_imported_at_idx ON feed_imports(imported_at)`,
+			`PRAGMA user_version = 7`,
 		}
 		for _, statement := range statements {
 			if _, err := transaction.ExecContext(ctx, statement); err != nil {

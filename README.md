@@ -27,8 +27,8 @@ firmware, and embedded-software manufacturers.
 > [!IMPORTANT]
 > PSIRTMap is pre-1.0. Normal release scans use local OSV and CISA KEV
 > snapshots and do not require internet access after `psirtmap sync`.
-> Transferable feed bundles for machines that never connect to the internet
-> are planned—not shipped.
+> Versioned feed bundles can transfer those snapshots into machines that never
+> connect to the internet.
 
 ## Why PSIRTMap?
 
@@ -48,7 +48,7 @@ is useful evidence; it is not proof that a shipped product is exploitable.
 
 ## What works today
 
-The current release, `v0.0.8`, includes:
+The current release, `v0.0.9`, includes:
 
 - A responsive, keyboard-driven terminal dashboard.
 - Local SQLite inventory for products, releases, and components.
@@ -63,13 +63,15 @@ The current release, `v0.0.8`, includes:
 - Append-only human assessments with `investigating`, `affected`,
   `not-affected`, and `fixed` decisions.
 - Reviewer, reason, evidence, timestamp, and complete decision history.
+- Versioned, checksummed offline feed export and atomic import.
+- Persistent bundle provenance, source freshness, and import timestamps.
 - An explicit `--live` scan mode for direct OSV checks.
 - Human-readable and deterministic JSON output.
 - Single-binary builds for macOS, Linux, and Windows.
 - No account, database server, or PSIRTMap cloud service.
 
-See the [roadmap](ROADMAP.md) for the ordered path to transferable offline
-feeds and VEX.
+See the [roadmap](ROADMAP.md) for the ordered path to VEX and later PSIRT
+workflow capabilities.
 
 ## Install
 
@@ -162,6 +164,8 @@ Use JSON output in scripts:
 psirtmap product list --json
 psirtmap release import AG-200@2.2 ./firmware-2.2.cdx.json --json
 psirtmap sync --json
+psirtmap feed export ./psirtmap-feed.bundle --json
+psirtmap feed import ./psirtmap-feed.bundle --json
 psirtmap scan AG-200@2.2 --json
 psirtmap findings --all --json
 psirtmap assess history AG-200@2.2 CVE-2026-12345 --json
@@ -206,8 +210,39 @@ A finding is marked as known exploited when its OSV identifier or one of its
 aliases matches a KEV CVE. KEV is a prioritization signal; it does not prove
 that a particular product configuration is exploitable. A new or changed
 component needs another successful `sync`; a failed source update preserves
-the last known-good local data. `check`, `sync`, and `scan --live` are the
-operations that require internet access.
+the last known-good local data. `check`, `sync`, `feed pull`, and `scan --live`
+are the operations that require internet access.
+
+## Air-gapped transfer
+
+On a connected staging machine, create the same component inventory used in
+the isolated environment, then download and export its intelligence:
+
+```sh
+psirtmap --database ./staging.db feed pull
+psirtmap --database ./staging.db feed export ./psirtmap-feed.bundle
+```
+
+Move the `.bundle` through the organization's approved transfer process. On
+the isolated machine:
+
+```sh
+psirtmap feed import ./psirtmap-feed.bundle
+psirtmap scan AG-200@2.2
+```
+
+The bundle contains the inventory-scoped OSV matches and the complete CISA KEV
+catalog. It does **not** contain product names, releases, SBOM documents,
+findings, assessments, or customer data. The connected staging inventory must
+therefore cover every package version that the isolated installation needs to
+scan.
+
+Each bundle is a versioned ZIP with a manifest and SHA-256 checksum for every
+data file. Import rejects missing, extra, oversized, malformed, or modified
+content before replacing either local snapshot; OSV and KEV activation and
+provenance recording happen in one database transaction. Checksums detect
+accidental corruption, but they do not prove who created a bundle. Accept feed
+files only through a trusted transfer path. Bundle signing is not yet shipped.
 
 Every successful normal scan reconciles its matches with the release's saved
 finding history. A first match is `new`, a repeated match is `existing`, a
@@ -235,7 +270,8 @@ live locally.
 The default database is `~/.psirtmap/psirtmap.db`. PSIRTMap creates it with
 permissions `0600` and applies compatible schema migrations automatically. It
 contains shipped-product inventory, the active OSV and CISA KEV snapshots,
-scan audit records, durable finding history, and append-only human assessments.
+feed-import provenance, scan audit records, durable finding history, and
+append-only human assessments.
 
 Choose another database with either:
 

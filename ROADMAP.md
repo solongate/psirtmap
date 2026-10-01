@@ -21,7 +21,7 @@ ordered so every release remains small, testable, and useful on its own.
 | Finding lifecycle | Persist matches and track what changed | Shipped in `v0.0.6` |
 | Human assessment | Record impact decisions and evidence | Shipped in `v0.0.7` |
 | KEV enrichment | Prioritize known exploitation | Shipped in `v0.0.8` |
-| Offline feeds | Scan from validated, transferable feed bundles | Planned |
+| Offline feeds | Scan from validated, transferable feed bundles | Shipped in `v0.0.9` |
 | VEX | Export human assessments in a machine-readable format | Later |
 
 ## Shipped: CycloneDX import
@@ -59,8 +59,8 @@ architecture:
 - `scan --live` remains available as an explicit diagnostic path.
 
 This first local matcher persists the authoritative result of OSV's exact
-package-version query. Transferable full-feed bundles and independent local
-range evaluation remain part of the offline-feed milestone.
+package-version query. Independent local range evaluation over a complete OSV
+database remains a later scalability milestone.
 
 ## Shipped: persistent finding lifecycle
 
@@ -100,24 +100,26 @@ range evaluation remain part of the offline-feed milestone.
 - KEV remains prioritization context, not proof that a product is affected.
 - A failed or malformed update cannot replace the last known-good catalog.
 
-## Next: transferable offline feeds
+## Shipped: transferable offline feeds
 
-The next milestone makes the synchronized intelligence portable to a machine
-that never connects to the internet:
+`v0.0.9` makes synchronized intelligence portable to a machine that never
+connects to the internet:
 
 - `psirtmap feed pull` on a connected machine.
 - `psirtmap feed export` to create a versioned, checksummed bundle.
 - `psirtmap feed import` after a controlled transfer into the isolated network.
 - Complete validation before imported data becomes active.
-- Clear provenance, freshness, and staleness reporting.
+- Persistent provenance, source freshness, and import timestamps.
+- Atomic OSV and KEV activation so a failed import preserves both previous
+  snapshots.
 
 ## Offline and air-gapped operation
 
-PSIRTMap is local-first today: after an internet-connected `sync`, normal scans
-run from SQLite without network access. Moving fresh data into a machine that
-never connects to the internet is not shipped yet.
+PSIRTMap is local-first: after an internet-connected `sync`, normal scans run
+from SQLite without network access. Feed bundles also move fresh data into a
+machine that never connects to the internet.
 
-The planned flow is:
+The supported flow is:
 
 ```text
 connected machine              isolated environment
@@ -125,16 +127,21 @@ connected machine              isolated environment
 feed pull -> feed export  ->  controlled transfer  ->  feed import -> scan
 ```
 
-The implementation must provide:
+The first bundle format provides:
 
 - Versioned bundles with manifests and checksums.
-- OSV data and CISA KEV metadata in a local matching database.
+- Inventory-scoped OSV data and the complete CISA KEV catalog.
 - Source, creation time, import time, and staleness information.
 - Complete validation before an imported feed becomes active.
-- A documented signing and trust model before secure-transfer claims are made.
+- Explicit checksum and size validation before activation.
+
+SHA-256 checksums detect transfer corruption but are not an authenticity
+mechanism. Bundle signing and a configurable trust policy remain later work.
 
 ## Later
 
+- Signed feed bundles and configurable trusted signing keys.
+- Full-ecosystem OSV data with independent local range evaluation.
 - CycloneDX VEX export from human assessments.
 - SPDX SBOM import.
 - Product support lifecycle and end-of-life metadata.

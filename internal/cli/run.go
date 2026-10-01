@@ -15,7 +15,7 @@ import (
 	"github.com/solongate/psirtmap/internal/store"
 )
 
-const version = "0.0.8"
+const version = "0.0.9"
 
 // VulnerabilityQuerier is implemented by the OSV client.
 type VulnerabilityQuerier interface {
@@ -64,7 +64,7 @@ func RunWithSources(
 	switch remaining[0] {
 	case "check":
 		return runCheck(ctx, remaining[1:], stdout, stderr, querier)
-	case "init", "product", "release", "component", "sync", "scan", "findings", "assess", "dashboard", "ui":
+	case "init", "product", "release", "component", "sync", "feed", "scan", "findings", "assess", "dashboard", "ui":
 		if printRequestedInventoryHelp(remaining, stdout) {
 			return 0
 		}
@@ -113,6 +113,8 @@ func printRequestedInventoryHelp(args []string, stdout io.Writer) bool {
 		printScanUsage(stdout)
 	case "sync":
 		printSyncUsage(stdout)
+	case "feed":
+		printFeedUsage(stdout)
 	case "findings":
 		printFindingsUsage(stdout)
 	case "assess":
@@ -195,6 +197,8 @@ func runInventoryCommand(
 		return runScan(ctx, args[1:], stdout, stderr, database, querier)
 	case "sync":
 		return runSync(ctx, args[1:], stdout, stderr, database, querier, kevFetcher)
+	case "feed":
+		return runFeed(ctx, args[1:], stdout, stderr, database, querier, kevFetcher)
 	case "findings":
 		return runFindings(ctx, args[1:], stdout, stderr, database)
 	case "assess":
