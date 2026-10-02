@@ -71,7 +71,7 @@ jobs:
             cp THIRD_PARTY_NOTICES.md "build/$package/"
             cp -R scripts "build/$package/"
             mkdir -p "build/$package/docs/assets"
-            cp docs/assets/dashboard.svg docs/assets/solongate-psirtmap-logo.png "build/$package/docs/assets/"
+            cp docs/assets/dashboard.svg docs/assets/psirtmap-hero.png docs/assets/solongate-psirtmap-logo.png "build/$package/docs/assets/"
             cp "$packageurl_dir/LICENSE" "build/$package/THIRD_PARTY-packageurl-go-LICENSE"
             cp "$sqlite_dir/LICENSE" "build/$package/THIRD_PARTY-modernc-sqlite-LICENSE"
             cp "$sqlite_dir/LICENSE-SQLITE" "build/$package/THIRD_PARTY-SQLITE-LICENSE"

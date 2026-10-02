@@ -22,7 +22,7 @@ firmware, and embedded-software manufacturers.
 
 </div>
 
-![PSIRTMap terminal dashboard](docs/assets/dashboard.svg)
+![PSIRTMap — vulnerability impact tracking for shipped products](docs/assets/psirtmap-hero.png)
 
 > [!IMPORTANT]
 > PSIRTMap is pre-1.0. Normal release scans use local OSV and CISA KEV
