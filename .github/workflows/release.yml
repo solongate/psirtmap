@@ -37,6 +37,8 @@ jobs:
 
       - name: Verify source
         run: |
+          sh -n scripts/install.sh
+          pwsh -NoProfile -Command '$tokens = $null; $parseErrors = $null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "scripts/install.ps1"), [ref]$tokens, [ref]$parseErrors) | Out-Null; if ($parseErrors.Count) { $parseErrors | ForEach-Object { Write-Error $_ }; exit 1 }'
           go mod download
           go mod verify
           go vet ./...
@@ -67,6 +69,7 @@ jobs:
               -o "build/$package/$binary" .
             cp LICENSE NOTICE README.md ROADMAP.md CHANGELOG.md SECURITY.md "build/$package/"
             cp THIRD_PARTY_NOTICES.md "build/$package/"
+            cp -R scripts "build/$package/"
             mkdir -p "build/$package/docs/assets"
             cp docs/assets/dashboard.svg docs/assets/solongate-psirtmap-logo.png "build/$package/docs/assets/"
             cp "$packageurl_dir/LICENSE" "build/$package/THIRD_PARTY-packageurl-go-LICENSE"

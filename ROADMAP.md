@@ -22,6 +22,7 @@ ordered so every release remains small, testable, and useful on its own.
 | Human assessment | Record impact decisions and evidence | Shipped in `v0.0.7` |
 | KEV enrichment | Prioritize known exploitation | Shipped in `v0.0.8` |
 | Offline feeds | Scan from validated, transferable feed bundles | Shipped in `v0.0.9` |
+| Guided local UX | Install, launch, onboard, and transfer feeds without memorizing commands | Shipped in `v0.0.9` |
 | VEX | Export human assessments in a machine-readable format | Later |
 
 ## Shipped: CycloneDX import
@@ -138,9 +139,24 @@ The first bundle format provides:
 SHA-256 checksums detect transfer corruption but are not an authenticity
 mechanism. Bundle signing and a configurable trust policy remain later work.
 
+## Shipped: guided installation and first run
+
+`v0.0.9` also makes the complete workflow accessible without memorizing CLI
+syntax:
+
+- Checksum-verifying macOS/Linux and Windows installers.
+- `psirtmap` as the only command required to open the dashboard.
+- A guided first-release import that creates the product, release, and
+  component inventory atomically.
+- File browsing from SBOM and feed-import forms.
+- Choice-based assessment status instead of free-text status entry.
+- A dashboard Feeds section for online updates and offline import/export.
+- `psirtmap doctor` for local database, feed, and scan-readiness diagnostics.
+
 ## Later
 
 - Signed feed bundles and configurable trusted signing keys.
+- Homebrew, WinGet, and other native package-manager distribution.
 - Full-ecosystem OSV data with independent local range evaluation.
 - CycloneDX VEX export from human assessments.
 - SPDX SBOM import.

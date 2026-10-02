@@ -91,7 +91,7 @@ func TestDashboardLoadsAndRendersRealInventory(t *testing.T) {
 	}
 
 	view := model.View()
-	for _, expected := range []string{"PSIRTMAP", "Overview", "1", "Local inventory", "CycloneDX import", "Local OSV snapshot", "NOT SYNCED"} {
+	for _, expected := range []string{"PSIRTMAP", "Overview", "1", "Local inventory", "CycloneDX import", "Local OSV snapshot", "NOT SYNCED", "Offline feed transfer", "Update OSV"} {
 		if !strings.Contains(view.Content, expected) {
 			t.Errorf("dashboard view does not contain %q", expected)
 		}
@@ -234,6 +234,171 @@ func TestDashboardImportsCycloneDXFromReleaseScreen(t *testing.T) {
 	}
 }
 
+func TestDashboardGuidedFirstImportCreatesCompleteInventoryAtomically(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database := newDashboardTestDatabase(t)
+	model := newDashboardModel(ctx, database, &dashboardQuerier{}, nil)
+	loadDashboard(t, model)
+	_, command := model.Update(dashboardSpecialKey(tea.KeyEnter))
+	if command != nil || model.form.kind != formQuickImport || len(model.form.fields) != 4 {
+		t.Fatalf("guided form = %+v, command = %v", model.form, command)
+	}
+	model.form.fields[0].input.SetValue("Gateway-X")
+	model.form.fields[1].input.SetValue("Edge gateway")
+	model.form.fields[2].input.SetValue("1.0")
+	model.form.fields[3].input.SetValue(filepath.Join("..", "..", "examples", "ag-200", "firmware-2.2.cdx.json"))
+
+	saved := model.saveForm()().(dashboardSavedMsg)
+	if saved.err != nil {
+		t.Fatalf("guided import: %v", saved.err)
+	}
+	if !strings.Contains(saved.message, "Gateway-X@1.0") || !strings.Contains(saved.message, "3 components") {
+		t.Fatalf("guided import message = %q", saved.message)
+	}
+	products, err := database.ListProducts(ctx)
+	if err != nil || len(products) != 1 || products[0].Description != "Edge gateway" {
+		t.Fatalf("products = %+v, %v", products, err)
+	}
+	components, err := database.ListComponents(ctx, "Gateway-X", "1.0")
+	if err != nil || len(components) != 3 {
+		t.Fatalf("components = %+v, %v", components, err)
+	}
+
+	failedDatabase := newDashboardTestDatabase(t)
+	failed := newDashboardModel(ctx, failedDatabase, &dashboardQuerier{}, nil)
+	loadDashboard(t, failed)
+	failed.openQuickImportForm()
+	failed.form.fields[0].input.SetValue("Should-Not-Exist")
+	failed.form.fields[2].input.SetValue("1.0")
+	failed.form.fields[3].input.SetValue(filepath.Join(t.TempDir(), "missing.json"))
+	message := failed.saveForm()().(dashboardSavedMsg)
+	if message.err == nil {
+		t.Fatal("invalid guided import succeeded")
+	}
+	products, err = failedDatabase.ListProducts(ctx)
+	if err != nil || len(products) != 0 {
+		t.Fatalf("failed guided import left products = %+v, %v", products, err)
+	}
+}
+
+func TestDashboardAssessmentStatusUsesChoices(t *testing.T) {
+	t.Parallel()
+
+	model := newDashboardModel(context.Background(), newDashboardTestDatabase(t), &dashboardQuerier{}, nil)
+	loadDashboard(t, model)
+	model.form = dashboardForm{
+		kind: formAssessment,
+		fields: []dashboardField{newDashboardChoiceField(
+			"Status", "choose", []string{
+				store.AssessmentInvestigating, store.AssessmentAffected,
+				store.AssessmentNotAffected, store.AssessmentFixed,
+			}, store.AssessmentInvestigating,
+		)},
+	}
+	model.form.fields[0].input.Focus()
+	model.Update(dashboardSpecialKey(tea.KeyRight))
+	if got := model.form.fields[0].input.Value(); got != store.AssessmentAffected {
+		t.Fatalf("choice after right = %q", got)
+	}
+	model.Update(dashboardSpecialKey(tea.KeyLeft))
+	if got := model.form.fields[0].input.Value(); got != store.AssessmentInvestigating {
+		t.Fatalf("choice after left = %q", got)
+	}
+}
+
+func TestDashboardFileFieldAcceptsPathsContainingBAndUsesControlOToBrowse(t *testing.T) {
+	t.Parallel()
+
+	model := newDashboardModel(context.Background(), newDashboardTestDatabase(t), &dashboardQuerier{}, nil)
+	loadDashboard(t, model)
+	model.openQuickImportForm()
+	model.form.active = 3
+	model.form.fields[0].input.Blur()
+	model.form.fields[3].input.Focus()
+
+	model.Update(dashboardKey("b"))
+	if model.pickingFile || model.form.fields[3].input.Value() != "b" {
+		t.Fatalf("typing b changed file picker state: picking = %v, value = %q",
+			model.pickingFile, model.form.fields[3].input.Value())
+	}
+	model.Update(tea.KeyPressMsg(tea.Key{Code: 'o', Mod: tea.ModCtrl}))
+	if !model.pickingFile {
+		t.Fatal("Ctrl+O did not open the file browser")
+	}
+}
+
+func TestDashboardExportsAndImportsOfflineFeed(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	source := newDashboardTestDatabase(t)
+	if _, err := source.CreateProduct(ctx, "Gateway", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.CreateRelease(ctx, "Gateway", "1.0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.CreateComponent(ctx, "Gateway", "1.0", "npm", "demo", "1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.SaveOSVSnapshot(ctx, []store.PackageSnapshot{{
+		Package: store.PackageVersion{Ecosystem: "npm", Name: "demo", Version: "1.0.0"},
+		Vulnerabilities: []osv.Vulnerability{{
+			ID: "GHSA-DEMO-2026", Aliases: []string{"CVE-2026-12345"},
+		}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.SaveKEVCatalog(ctx, kev.Catalog{
+		CatalogVersion: "2026.10.02", DateReleased: "2026-10-02T12:00:00Z", Count: 1,
+		SourceURL: "https://example.test/kev.json",
+		Vulnerabilities: []kev.Vulnerability{{
+			CVEID: "CVE-2026-12345", VendorProject: "Example", Product: "Demo",
+			VulnerabilityName: "Test record", DateAdded: "2026-10-01",
+			ShortDescription: "Test", RequiredAction: "Apply update", DueDate: "2026-10-22",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	bundlePath := filepath.Join(t.TempDir(), "transfer.bundle")
+	sourceModel := newDashboardModel(ctx, source, &dashboardQuerier{}, nil)
+	loadDashboard(t, sourceModel)
+	sourceModel.openFeedExportForm()
+	sourceModel.form.fields[0].input.SetValue(bundlePath)
+	exported := sourceModel.saveForm()().(dashboardSavedMsg)
+	if exported.err != nil || !strings.Contains(exported.message, "1 packages") {
+		t.Fatalf("dashboard feed export = %+v", exported)
+	}
+
+	target := newDashboardTestDatabase(t)
+	targetModel := newDashboardModel(ctx, target, &dashboardQuerier{}, nil)
+	loadDashboard(t, targetModel)
+	targetModel.openFeedImportForm()
+	targetModel.form.fields[0].input.SetValue(bundlePath)
+	imported := targetModel.saveForm()().(dashboardSavedMsg)
+	if imported.err != nil || !strings.Contains(imported.message, "1 vulnerabilities") {
+		t.Fatalf("dashboard feed import = %+v", imported)
+	}
+	_, refresh := targetModel.Update(imported)
+	if refresh == nil {
+		t.Fatal("successful feed import did not request an inventory refresh")
+	}
+	targetModel.Update(refresh())
+	if targetModel.data.sync == nil || targetModel.data.kevSync == nil || targetModel.data.feedImport == nil {
+		t.Fatalf("imported feed status = OSV %+v, KEV %+v, import %+v",
+			targetModel.data.sync, targetModel.data.kevSync, targetModel.data.feedImport)
+	}
+	targetModel.screen = screenFeeds
+	for _, expected := range []string{"Last bundle import", "transfer.bundle", "SHA-256"} {
+		if content := targetModel.View().Content; !strings.Contains(content, expected) {
+			t.Errorf("feeds view = %q, want %q", content, expected)
+		}
+	}
+}
+
 func TestDashboardFormKeepsValidationError(t *testing.T) {
 	t.Parallel()
 
@@ -300,6 +465,7 @@ func TestDashboardRendersEverySectionWithInventory(t *testing.T) {
 		{screenComponents, []string{"Components", "openssl@3.0.8", "Alpine"}},
 		{screenFindings, []string{"Findings", "No active findings yet"}},
 		{screenScanner, []string{"Release scanner", "AG-200@2.2", "Press u to update"}},
+		{screenFeeds, []string{"Vulnerability feeds", "Update from internet", "Import trusted bundle", "Export current bundle"}},
 	}
 	for _, check := range checks {
 		model.screen = check.screen
@@ -327,7 +493,7 @@ func TestDashboardHelpCancelRefreshAndEmptyScanKeys(t *testing.T) {
 	}
 
 	model.Update(dashboardKey("n"))
-	if model.form.kind != formProduct {
+	if model.form.kind != formQuickImport {
 		t.Fatalf("form kind = %v", model.form.kind)
 	}
 	model.Update(dashboardSpecialKey(tea.KeyEscape))

@@ -16,6 +16,7 @@ import (
 type releaseImportOutput struct {
 	Product              string                  `json:"product"`
 	Release              string                  `json:"release"`
+	CreatedProduct       bool                    `json:"created_product,omitempty"`
 	CreatedRelease       bool                    `json:"created_release"`
 	Source               string                  `json:"source"`
 	Format               string                  `json:"format"`
@@ -71,6 +72,18 @@ func importReleaseSBOM(
 	releaseVersion string,
 	sourcePath string,
 ) (releaseImportOutput, error) {
+	return importProductReleaseSBOM(ctx, database, productName, "", releaseVersion, sourcePath, false)
+}
+
+func importProductReleaseSBOM(
+	ctx context.Context,
+	database *store.DB,
+	productName string,
+	productDescription string,
+	releaseVersion string,
+	sourcePath string,
+	createMissingProduct bool,
+) (releaseImportOutput, error) {
 	report, err := sbom.ParseFile(sourcePath)
 	if err != nil {
 		return releaseImportOutput{}, err
@@ -91,22 +104,26 @@ func importReleaseSBOM(
 			PURL:      component.PURL,
 		}
 	}
-	result, err := database.ImportReleaseComponents(
-		ctx,
-		productName,
-		releaseVersion,
-		components,
-		store.SBOMImportMetadata{
-			Format:         report.Format,
-			SpecVersion:    report.SpecVersion,
-			SerialNumber:   report.SerialNumber,
-			DocumentSHA256: report.DocumentSHA256,
-			SourceName:     filepath.Base(sourcePath),
-			Discovered:     report.Discovered,
-			Skipped:        len(report.Skipped),
-			Duplicates:     report.Duplicates,
-		},
-	)
+	metadata := store.SBOMImportMetadata{
+		Format:         report.Format,
+		SpecVersion:    report.SpecVersion,
+		SerialNumber:   report.SerialNumber,
+		DocumentSHA256: report.DocumentSHA256,
+		SourceName:     filepath.Base(sourcePath),
+		Discovered:     report.Discovered,
+		Skipped:        len(report.Skipped),
+		Duplicates:     report.Duplicates,
+	}
+	var result store.ComponentImportResult
+	if createMissingProduct {
+		result, err = database.ImportProductReleaseComponents(
+			ctx, productName, productDescription, releaseVersion, components, metadata,
+		)
+	} else {
+		result, err = database.ImportReleaseComponents(
+			ctx, productName, releaseVersion, components, metadata,
+		)
+	}
 	if err != nil {
 		return releaseImportOutput{}, err
 	}
@@ -114,6 +131,7 @@ func importReleaseSBOM(
 	return releaseImportOutput{
 		Product:              result.Product,
 		Release:              result.ReleaseVersion,
+		CreatedProduct:       result.CreatedProduct,
 		CreatedRelease:       result.CreatedRelease,
 		Source:               sourcePath,
 		Format:               report.Format,

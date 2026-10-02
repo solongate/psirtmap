@@ -64,7 +64,7 @@ func RunWithSources(
 	switch remaining[0] {
 	case "check":
 		return runCheck(ctx, remaining[1:], stdout, stderr, querier)
-	case "init", "product", "release", "component", "sync", "feed", "scan", "findings", "assess", "dashboard", "ui":
+	case "init", "product", "release", "component", "sync", "feed", "scan", "findings", "assess", "doctor", "dashboard", "ui":
 		if printRequestedInventoryHelp(remaining, stdout) {
 			return 0
 		}
@@ -93,7 +93,7 @@ func printRequestedInventoryHelp(args []string, stdout io.Writer) bool {
 	if len(commandArgs) == 1 && commandArgs[0] == "help" {
 		helpRequested = true
 	}
-	if len(commandArgs) == 0 && command != "init" && command != "sync" && command != "findings" && command != "dashboard" && command != "ui" {
+	if len(commandArgs) == 0 && command != "init" && command != "sync" && command != "findings" && command != "doctor" && command != "dashboard" && command != "ui" {
 		helpRequested = true
 	}
 	if !helpRequested {
@@ -119,6 +119,8 @@ func printRequestedInventoryHelp(args []string, stdout io.Writer) bool {
 		printFindingsUsage(stdout)
 	case "assess":
 		printAssessUsage(stdout)
+	case "doctor":
+		printDoctorUsage(stdout)
 	case "dashboard", "ui":
 		printDashboardUsage(stdout)
 	}
@@ -203,6 +205,8 @@ func runInventoryCommand(
 		return runFindings(ctx, args[1:], stdout, stderr, database)
 	case "assess":
 		return runAssess(ctx, args[1:], stdout, stderr, database)
+	case "doctor":
+		return runDoctor(ctx, args[1:], stdout, stderr, database)
 	case "dashboard", "ui":
 		return runDashboard(ctx, args[1:], stdout, stderr, database, querier, kevFetcher)
 	default:

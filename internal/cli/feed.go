@@ -64,12 +64,42 @@ func runFeedExport(ctx context.Context, args []string, stdout, stderr io.Writer,
 	if err := validateCLIIdentifier("feed bundle path", path); err != nil {
 		return usageError(stderr, err, printFeedUsage)
 	}
+	info, err := exportFeedBundle(ctx, database, path, createdAt)
+	if err != nil {
+		return commandError(stderr, err)
+	}
+	if jsonOutput {
+		return printJSON(stdout, stderr, info)
+	}
+	fmt.Fprintln(stdout, "OFFLINE FEED EXPORTED")
+	fmt.Fprintf(stdout, "Bundle           %s\n", info.Path)
+	fmt.Fprintf(stdout, "Format           v%d\n", info.FormatVersion)
+	fmt.Fprintf(stdout, "Packages         %d\n", info.Packages)
+	fmt.Fprintf(stdout, "Vulnerabilities  %d\n", info.Vulnerabilities)
+	fmt.Fprintf(stdout, "KEV entries      %d\n", info.KEVEntries)
+	fmt.Fprintf(stdout, "Created          %s\n", info.CreatedAt.Format("2006-01-02 15:04:05 UTC"))
+	fmt.Fprintf(stdout, "Manifest SHA256  %s\n", info.ManifestSHA256)
+	return 0
+}
+
+func exportFeedBundle(
+	ctx context.Context,
+	database *store.DB,
+	path string,
+	createdAt time.Time,
+) (feed.Info, error) {
+	if err := validateCLIIdentifier("feed bundle path", path); err != nil {
+		return feed.Info{}, err
+	}
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC().Truncate(time.Second)
+	}
 	intelligence, err := database.ExportIntelligence(ctx)
 	if err != nil {
 		if errors.Is(err, store.ErrSnapshotNotFound) {
 			err = errors.New("local vulnerability data is incomplete; run \"psirtmap feed pull\" first")
 		}
-		return commandError(stderr, err)
+		return feed.Info{}, err
 	}
 	snapshot := feed.Snapshot{
 		OSV: feed.OSVSnapshot{
@@ -88,20 +118,9 @@ func runFeedExport(ctx context.Context, args []string, stdout, stderr io.Writer,
 	feed.Sort(&snapshot)
 	info, err := feed.Write(path, "PSIRTMap "+version, snapshot, createdAt)
 	if err != nil {
-		return commandError(stderr, err)
+		return feed.Info{}, err
 	}
-	if jsonOutput {
-		return printJSON(stdout, stderr, info)
-	}
-	fmt.Fprintln(stdout, "OFFLINE FEED EXPORTED")
-	fmt.Fprintf(stdout, "Bundle           %s\n", info.Path)
-	fmt.Fprintf(stdout, "Format           v%d\n", info.FormatVersion)
-	fmt.Fprintf(stdout, "Packages         %d\n", info.Packages)
-	fmt.Fprintf(stdout, "Vulnerabilities  %d\n", info.Vulnerabilities)
-	fmt.Fprintf(stdout, "KEV entries      %d\n", info.KEVEntries)
-	fmt.Fprintf(stdout, "Created          %s\n", info.CreatedAt.Format("2006-01-02 15:04:05 UTC"))
-	fmt.Fprintf(stdout, "Manifest SHA256  %s\n", info.ManifestSHA256)
-	return 0
+	return info, nil
 }
 
 func runFeedImport(ctx context.Context, args []string, stdout, stderr io.Writer, database *store.DB) int {
@@ -120,9 +139,35 @@ func runFeedImport(ctx context.Context, args []string, stdout, stderr io.Writer,
 	if err := validateCLIIdentifier("feed bundle path", path); err != nil {
 		return usageError(stderr, err, printFeedUsage)
 	}
-	snapshot, info, err := feed.Read(path)
+	info, result, err := importFeedBundle(ctx, database, path)
 	if err != nil {
 		return commandError(stderr, err)
+	}
+	if jsonOutput {
+		return printJSON(stdout, stderr, feedImportOutput{Bundle: info, Import: result})
+	}
+	fmt.Fprintln(stdout, "OFFLINE FEED IMPORTED")
+	fmt.Fprintf(stdout, "Bundle           %s\n", oneLine(path))
+	fmt.Fprintln(stdout, "Integrity        SHA-256 checksums verified")
+	fmt.Fprintf(stdout, "Packages         %d\n", result.Packages)
+	fmt.Fprintf(stdout, "Vulnerabilities  %d\n", result.Vulnerabilities)
+	fmt.Fprintf(stdout, "KEV entries      %d\n", result.KEVEntries)
+	fmt.Fprintf(stdout, "Feed created     %s\n", result.BundleCreatedAt.Format("2006-01-02 15:04:05 UTC"))
+	fmt.Fprintf(stdout, "Imported         %s\n", result.ImportedAt.Format("2006-01-02 15:04:05 UTC"))
+	return 0
+}
+
+func importFeedBundle(
+	ctx context.Context,
+	database *store.DB,
+	path string,
+) (feed.Info, store.FeedImport, error) {
+	if err := validateCLIIdentifier("feed bundle path", path); err != nil {
+		return feed.Info{}, store.FeedImport{}, err
+	}
+	snapshot, info, err := feed.Read(path)
+	if err != nil {
+		return feed.Info{}, store.FeedImport{}, err
 	}
 	result, err := database.ImportIntelligence(ctx, store.IntelligenceSnapshot{
 		OSVSync: store.VulnerabilitySync{
@@ -141,18 +186,7 @@ func runFeedImport(ctx context.Context, args []string, stdout, stderr io.Writer,
 		SourceName: filepath.Base(path), ManifestSHA256: info.ManifestSHA256,
 	})
 	if err != nil {
-		return commandError(stderr, err)
+		return feed.Info{}, store.FeedImport{}, err
 	}
-	if jsonOutput {
-		return printJSON(stdout, stderr, feedImportOutput{Bundle: info, Import: result})
-	}
-	fmt.Fprintln(stdout, "OFFLINE FEED IMPORTED")
-	fmt.Fprintf(stdout, "Bundle           %s\n", oneLine(path))
-	fmt.Fprintln(stdout, "Integrity        SHA-256 checksums verified")
-	fmt.Fprintf(stdout, "Packages         %d\n", result.Packages)
-	fmt.Fprintf(stdout, "Vulnerabilities  %d\n", result.Vulnerabilities)
-	fmt.Fprintf(stdout, "KEV entries      %d\n", result.KEVEntries)
-	fmt.Fprintf(stdout, "Feed created     %s\n", result.BundleCreatedAt.Format("2006-01-02 15:04:05 UTC"))
-	fmt.Fprintf(stdout, "Imported         %s\n", result.ImportedAt.Format("2006-01-02 15:04:05 UTC"))
-	return 0
+	return info, result, nil
 }
