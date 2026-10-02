@@ -34,18 +34,19 @@
   <text x="76" y="151" class="mono accent" font-size="50" font-weight="800" letter-spacing="3">PSIRTMAP</text>
   <text x="78" y="181" class="mono label">shipped-product vulnerability impact • local-first • human-reviewed</text>
 
-  <rect x="76" y="216" width="256" height="358" rx="12" fill="#0d1117" stroke="#3c4450" stroke-width="2"/>
+  <rect x="76" y="216" width="256" height="370" rx="12" fill="#0d1117" stroke="#3c4450" stroke-width="2"/>
   <text x="100" y="252" class="mono strong">Workspace</text>
   <rect x="92" y="272" width="224" height="42" rx="8" fill="#242139"/>
   <rect x="92" y="272" width="4" height="42" rx="2" fill="#8b7cf6"/>
   <text x="112" y="299" class="mono strong accent">Overview</text>
-  <text x="112" y="346" class="mono body">Products</text>
-  <text x="112" y="390" class="mono body">Releases</text>
-  <text x="112" y="426" class="mono body">Components</text>
-  <text x="112" y="466" class="mono body">Findings</text>
-  <text x="112" y="506" class="mono body">Scanner</text>
-  <text x="100" y="538" class="mono label">DATABASE</text>
-  <text x="100" y="560" class="mono body">~/.psirtmap/</text>
+  <text x="112" y="342" class="mono body">Products</text>
+  <text x="112" y="378" class="mono body">Releases</text>
+  <text x="112" y="414" class="mono body">Components</text>
+  <text x="112" y="450" class="mono body">Findings</text>
+  <text x="112" y="486" class="mono body">Scanner</text>
+  <text x="112" y="522" class="mono body">Feeds</text>
+  <text x="100" y="550" class="mono label">DATABASE</text>
+  <text x="100" y="574" class="mono body">~/.psirtmap/</text>
 
   <rect x="354" y="216" width="850" height="358" rx="12" fill="#0d1117" stroke="#51479a" stroke-width="2"/>
   <text x="382" y="254" class="mono strong">Overview</text>
@@ -78,19 +79,15 @@
   <text x="868" y="472" class="mono body">Durable findings</text>
   <text x="1088" y="472" class="mono mint" font-size="16" font-weight="700">READY</text>
   <circle cx="850" cy="502" r="6" fill="#5eead4"/>
-  <text x="868" y="508" class="mono body">Human assessments</text>
+  <text x="868" y="508" class="mono body">Offline feed transfer</text>
   <text x="1088" y="508" class="mono mint" font-size="16" font-weight="700">READY</text>
 
-  <text x="382" y="538" class="mono label">SELECT A RELEASE, THEN PRESS S TO SCAN</text>
+  <text x="382" y="538" class="mono label">PRESS ENTER TO RUN THE RECOMMENDED NEXT ACTION</text>
 
   <path d="M76 610h1128" stroke="#30363d"/>
   <text x="78" y="642" class="mono body"><tspan class="mint" font-weight="700">↑↓</tspan> move</text>
-  <text x="214" y="642" class="mono body"><tspan class="mint" font-weight="700">→/enter</tspan> open</text>
-  <text x="410" y="642" class="mono body"><tspan class="mint" font-weight="700">n</tspan> new</text>
-  <text x="520" y="642" class="mono body"><tspan class="mint" font-weight="700">i</tspan> import</text>
-  <text x="646" y="642" class="mono body"><tspan class="mint" font-weight="700">u</tspan> sync</text>
-  <text x="756" y="642" class="mono body"><tspan class="mint" font-weight="700">s</tspan> scan</text>
-  <text x="856" y="642" class="mono body"><tspan class="mint" font-weight="700">a</tspan> assess</text>
-  <text x="976" y="642" class="mono body"><tspan class="mint" font-weight="700">?</tspan> help</text>
-  <text x="1096" y="642" class="mono body"><tspan class="mint" font-weight="700">q</tspan> quit</text>
+  <text x="214" y="642" class="mono body"><tspan class="mint" font-weight="700">Enter</tspan> next action</text>
+  <text x="474" y="642" class="mono body"><tspan class="mint" font-weight="700">Tab</tspan> change focus</text>
+  <text x="724" y="642" class="mono body"><tspan class="mint" font-weight="700">?</tspan> help</text>
+  <text x="878" y="642" class="mono body"><tspan class="mint" font-weight="700">q</tspan> quit safely</text>
 </svg>

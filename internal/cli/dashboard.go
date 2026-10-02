@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/filepicker"
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -33,6 +36,7 @@ const (
 	screenComponents
 	screenFindings
 	screenScanner
+	screenFeeds
 	screenCount
 )
 
@@ -46,6 +50,7 @@ var dashboardScreens = []struct {
 	{label: "Components", hint: "Third-party software inventory"},
 	{label: "Findings", hint: "Durable potential-impact history"},
 	{label: "Scanner", hint: "Local impact and KEV prioritization"},
+	{label: "Feeds", hint: "Online updates and air-gapped transfer"},
 }
 
 type dashboardInventory struct {
@@ -56,6 +61,7 @@ type dashboardInventory struct {
 	assessments []store.Assessment
 	sync        *store.VulnerabilitySync
 	kevSync     *store.KEVSync
+	feedImport  *store.FeedImport
 }
 
 type dashboardInventoryMsg struct {
@@ -87,12 +93,18 @@ const (
 	formComponent
 	formSBOMImport
 	formAssessment
+	formQuickImport
+	formFeedExport
+	formFeedImport
 )
 
 type dashboardField struct {
-	label string
-	hint  string
-	input textinput.Model
+	label        string
+	hint         string
+	input        textinput.Model
+	file         bool
+	choices      []string
+	allowedTypes []string
 }
 
 type dashboardForm struct {
@@ -105,26 +117,28 @@ type dashboardForm struct {
 }
 
 type dashboardModel struct {
-	ctx        context.Context
-	database   *store.DB
-	querier    VulnerabilityQuerier
-	kevFetcher KEVFetcher
-	width      int
-	height     int
-	screen     dashboardScreen
-	focusMenu  bool
-	selected   [screenCount]int
-	data       dashboardInventory
-	loaded     bool
-	loading    bool
-	form       dashboardForm
-	showHelp   bool
-	status     string
-	statusErr  bool
-	scanning   bool
-	syncing    bool
-	scan       *scanResult
-	spinner    spinner.Model
+	ctx         context.Context
+	database    *store.DB
+	querier     VulnerabilityQuerier
+	kevFetcher  KEVFetcher
+	width       int
+	height      int
+	screen      dashboardScreen
+	focusMenu   bool
+	selected    [screenCount]int
+	data        dashboardInventory
+	loaded      bool
+	loading     bool
+	form        dashboardForm
+	showHelp    bool
+	status      string
+	statusErr   bool
+	scanning    bool
+	syncing     bool
+	scan        *scanResult
+	spinner     spinner.Model
+	filePicker  filepicker.Model
+	pickingFile bool
 }
 
 var (
@@ -176,6 +190,14 @@ func newDashboardModel(ctx context.Context, database *store.DB, querier Vulnerab
 		spinner.WithSpinner(spinner.MiniDot),
 		spinner.WithStyle(lipgloss.NewStyle().Foreground(colorAccent)),
 	)
+	picker := filepicker.New()
+	picker.AllowedTypes = []string{".json", ".bundle"}
+	picker.ShowPermissions = false
+	picker.ShowSize = true
+	picker.SetHeight(12)
+	if workingDirectory, err := os.Getwd(); err == nil {
+		picker.CurrentDirectory = workingDirectory
+	}
 	return &dashboardModel{
 		ctx:        ctx,
 		database:   database,
@@ -187,6 +209,7 @@ func newDashboardModel(ctx context.Context, database *store.DB, querier Vulnerab
 		focusMenu:  true,
 		loading:    true,
 		spinner:    loader,
+		filePicker: picker,
 	}
 }
 
@@ -229,6 +252,12 @@ func (m *dashboardModel) loadInventory() tea.Cmd {
 		latestKEVSync, err := m.database.LatestKEVSync(m.ctx)
 		if err == nil {
 			inventory.kevSync = &latestKEVSync
+		} else if !errors.Is(err, store.ErrSnapshotNotFound) {
+			return dashboardInventoryMsg{err: err}
+		}
+		latestFeedImport, err := m.database.LatestFeedImport(m.ctx)
+		if err == nil {
+			inventory.feedImport = &latestFeedImport
 		} else if !errors.Is(err, store.ErrSnapshotNotFound) {
 			return dashboardInventoryMsg{err: err}
 		}
@@ -336,9 +365,19 @@ func (m *dashboardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.setStatus("Refreshing inventory...", false)
 			return m, tea.Batch(m.loadInventory(), m.spinner.Tick)
 		case "n":
+			if m.screen == screenOverview && len(m.data.products) == 0 {
+				return m, m.openQuickImportForm()
+			}
 			return m, m.openCreateForm()
 		case "i":
+			if m.screen == screenOverview && len(m.data.products) == 0 {
+				return m, m.openQuickImportForm()
+			}
 			return m, m.openImportForm()
+		case "e":
+			if m.screen == screenFeeds {
+				return m, m.openFeedExportForm()
+			}
 		case "a":
 			return m, m.openAssessmentForm()
 		case "s":
@@ -365,19 +404,105 @@ func (m *dashboardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		case "end", "G":
 			m.moveToBoundary(true)
 		case "enter":
-			if m.focusMenu {
+			if m.screen == screenOverview {
+				return m.primaryAction()
+			} else if m.focusMenu {
 				m.focusMenu = false
 			} else if m.screen == screenScanner {
 				return m.startScan()
 			} else if m.screen == screenFindings {
 				return m, m.openAssessmentForm()
+			} else if m.screen == screenFeeds {
+				return m.feedAction()
 			}
 		}
 	}
 	return m, nil
 }
 
+func (m *dashboardModel) primaryAction() (tea.Model, tea.Cmd) {
+	if len(m.data.products) == 0 {
+		return m, m.openQuickImportForm()
+	}
+	if len(m.data.components) == 0 {
+		m.screen = screenReleases
+		m.focusMenu = false
+		return m, m.openImportForm()
+	}
+	if m.data.sync == nil {
+		return m.startSync()
+	}
+	if len(m.data.findings) > 0 {
+		m.screen = screenFindings
+		m.focusMenu = false
+		return m, nil
+	}
+	m.screen = screenScanner
+	m.focusMenu = false
+	return m, nil
+}
+
+func (m *dashboardModel) openQuickImportForm() tea.Cmd {
+	m.form = dashboardForm{
+		kind:  formQuickImport,
+		title: "Import your first shipped release",
+		fields: []dashboardField{
+			newDashboardField("Product name", "The product family customers receive", "AG-200"),
+			newDashboardField("Description (optional)", "A short description of the product", "Industrial gateway"),
+			newDashboardField("Release version", "The shipped firmware or software version", "2.2"),
+			newDashboardFileField("CycloneDX JSON", "Press Ctrl+O to browse, or type / drag the file path", "./firmware.cdx.json", []string{".json"}),
+		},
+	}
+	m.form.fields[0].input.Focus()
+	return nil
+}
+
+func (m *dashboardModel) feedAction() (tea.Model, tea.Cmd) {
+	switch m.selected[screenFeeds] {
+	case 0:
+		return m.startSync()
+	case 1:
+		return m, m.openFeedImportForm()
+	case 2:
+		return m, m.openFeedExportForm()
+	default:
+		return m, nil
+	}
+}
+
+func (m *dashboardModel) openFeedImportForm() tea.Cmd {
+	m.form = dashboardForm{
+		kind:  formFeedImport,
+		title: "Import offline vulnerability feed",
+		fields: []dashboardField{
+			newDashboardFileField("Bundle path", "Press Ctrl+O to browse for a trusted .bundle file", "./psirtmap-feed.bundle", []string{".bundle"}),
+		},
+	}
+	m.form.fields[0].input.Focus()
+	return nil
+}
+
+func (m *dashboardModel) openFeedExportForm() tea.Cmd {
+	createdAt := time.Now().UTC().Truncate(time.Second)
+	m.form = dashboardForm{
+		kind:  formFeedExport,
+		title: "Export offline vulnerability feed",
+		fields: []dashboardField{
+			newDashboardFieldWithValue(
+				"Output path",
+				"A new .bundle file; existing files are never overwritten",
+				fmt.Sprintf("./psirtmap-feed-%s.bundle", createdAt.Format("20060102T150405Z")),
+			),
+		},
+	}
+	m.form.fields[0].input.Focus()
+	return nil
+}
+
 func (m *dashboardModel) openImportForm() tea.Cmd {
+	if m.screen == screenFeeds {
+		return m.openFeedImportForm()
+	}
 	if m.screen != screenReleases {
 		m.setStatus("Open Releases and press i to import a CycloneDX SBOM", false)
 		return nil
@@ -396,7 +521,7 @@ func (m *dashboardModel) openImportForm() tea.Cmd {
 		title: "Import CycloneDX release SBOM",
 		fields: []dashboardField{
 			newDashboardFieldWithValue("Product@release", "Existing product; the release may be new", reference),
-			newDashboardField("CycloneDX JSON path", "Absolute or current-directory-relative file path", "./firmware.cdx.json"),
+			newDashboardFileField("CycloneDX JSON path", "Press Ctrl+O to browse, or type / drag the file path", "./firmware.cdx.json", []string{".json"}),
 		},
 	}
 	m.form.fields[0].input.Focus()
@@ -419,7 +544,11 @@ func (m *dashboardModel) openAssessmentForm() tea.Cmd {
 		title:  "Assess " + finding.VulnerabilityID + " in " + finding.Product + "@" + finding.Release,
 		target: &finding,
 		fields: []dashboardField{
-			newDashboardFieldWithValue("Status", "investigating, affected, not-affected, or fixed", store.AssessmentInvestigating),
+			newDashboardChoiceField(
+				"Status", "Use ←/→ to choose; no typing required",
+				[]string{store.AssessmentInvestigating, store.AssessmentAffected, store.AssessmentNotAffected, store.AssessmentFixed},
+				store.AssessmentInvestigating,
+			),
 			newDashboardField("Reason", "Required for affected, not-affected, and fixed", "Feature disabled in this firmware build"),
 			newDashboardField("Reviewer", "Person responsible for this decision", "reviewer name"),
 			newDashboardField("Evidence (optional)", "Ticket, test report, advisory, or other reference", "SEC-123 or document reference"),
@@ -430,6 +559,9 @@ func (m *dashboardModel) openAssessmentForm() tea.Cmd {
 }
 
 func (m *dashboardModel) updateForm(message tea.Msg) (tea.Model, tea.Cmd) {
+	if m.pickingFile {
+		return m.updateFilePicker(message)
+	}
 	switch message := message.(type) {
 	case tea.WindowSizeMsg:
 		m.width = max(message.Width, 1)
@@ -466,6 +598,18 @@ func (m *dashboardModel) updateForm(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.form = dashboardForm{}
 			m.setStatus("Action canceled", false)
 			return m, nil
+		case "ctrl+o":
+			if len(m.form.fields) > 0 && m.form.fields[m.form.active].file {
+				return m, m.openFilePicker()
+			}
+		case "left":
+			if m.changeChoice(-1) {
+				return m, nil
+			}
+		case "right":
+			if m.changeChoice(1) {
+				return m, nil
+			}
 		case "tab", "down":
 			return m, m.focusFormField(1)
 		case "shift+tab", "up":
@@ -484,9 +628,83 @@ func (m *dashboardModel) updateForm(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	active := m.form.active
+	if len(m.form.fields[active].choices) > 0 {
+		return m, nil
+	}
 	updated, command := m.form.fields[active].input.Update(message)
 	m.form.fields[active].input = updated
 	m.form.err = nil
+	return m, command
+}
+
+func (m *dashboardModel) changeChoice(delta int) bool {
+	if len(m.form.fields) == 0 {
+		return false
+	}
+	field := &m.form.fields[m.form.active]
+	if len(field.choices) == 0 {
+		return false
+	}
+	current := 0
+	for index, choice := range field.choices {
+		if choice == field.input.Value() {
+			current = index
+			break
+		}
+	}
+	current = (current + delta + len(field.choices)) % len(field.choices)
+	field.input.SetValue(field.choices[current])
+	m.form.err = nil
+	return true
+}
+
+func (m *dashboardModel) openFilePicker() tea.Cmd {
+	field := m.form.fields[m.form.active]
+	picker := filepicker.New()
+	picker.AllowedTypes = append([]string(nil), field.allowedTypes...)
+	picker.ShowPermissions = false
+	picker.ShowSize = true
+	picker.SetHeight(max(5, min(14, m.height-10)))
+	currentValue := strings.TrimSpace(field.input.Value())
+	if currentValue != "" {
+		directory := currentValue
+		if info, err := os.Stat(currentValue); err == nil && !info.IsDir() {
+			directory = filepath.Dir(currentValue)
+		} else if filepath.Ext(currentValue) != "" {
+			directory = filepath.Dir(currentValue)
+		}
+		if absolute, err := filepath.Abs(directory); err == nil {
+			if info, statErr := os.Stat(absolute); statErr == nil && info.IsDir() {
+				picker.CurrentDirectory = absolute
+			}
+		}
+	}
+	m.filePicker = picker
+	m.pickingFile = true
+	return m.filePicker.Init()
+}
+
+func (m *dashboardModel) updateFilePicker(message tea.Msg) (tea.Model, tea.Cmd) {
+	if key, ok := message.(tea.KeyPressMsg); ok {
+		switch key.String() {
+		case "ctrl+c":
+			return m, tea.Quit
+		case "esc":
+			m.pickingFile = false
+			return m, nil
+		}
+	}
+	updated, command := m.filePicker.Update(message)
+	m.filePicker = updated
+	if selected, path := m.filePicker.DidSelectFile(message); selected {
+		m.form.fields[m.form.active].input.SetValue(path)
+		m.pickingFile = false
+		m.form.err = nil
+		return m, nil
+	}
+	if disabled, path := m.filePicker.DidSelectDisabledFile(message); disabled {
+		m.form.err = fmt.Errorf("unsupported file type: %s", filepath.Base(path))
+	}
 	return m, command
 }
 
@@ -537,6 +755,8 @@ func (m *dashboardModel) openCreateForm() tea.Cmd {
 	case screenScanner:
 		m.setStatus("Select a release and press s or Enter to scan", false)
 		return nil
+	case screenFeeds:
+		return m.openFeedImportForm()
 	}
 
 	m.form = form
@@ -556,6 +776,19 @@ func newDashboardField(label, hint, placeholder string) dashboardField {
 func newDashboardFieldWithValue(label, hint, value string) dashboardField {
 	field := newDashboardField(label, hint, "")
 	field.input.SetValue(value)
+	return field
+}
+
+func newDashboardFileField(label, hint, placeholder string, allowedTypes []string) dashboardField {
+	field := newDashboardField(label, hint, placeholder)
+	field.file = true
+	field.allowedTypes = append([]string(nil), allowedTypes...)
+	return field
+}
+
+func newDashboardChoiceField(label, hint string, choices []string, value string) dashboardField {
+	field := newDashboardFieldWithValue(label, hint, value)
+	field.choices = append([]string(nil), choices...)
 	return field
 }
 
@@ -605,6 +838,17 @@ func (m *dashboardModel) saveForm() tea.Cmd {
 				),
 				err: err,
 			}
+		case formQuickImport:
+			result, err := importProductReleaseSBOM(
+				m.ctx, m.database, values[0], values[1], values[2], values[3], true,
+			)
+			return dashboardSavedMsg{
+				message: fmt.Sprintf(
+					"Imported %s@%s with %d components; next, update vulnerability data",
+					result.Product, result.Release, result.Imported,
+				),
+				err: err,
+			}
 		case formAssessment:
 			if m.form.target == nil {
 				return dashboardSavedMsg{err: errors.New("assessment target is unavailable")}
@@ -619,6 +863,18 @@ func (m *dashboardModel) saveForm() tea.Cmd {
 			})
 			return dashboardSavedMsg{
 				message: fmt.Sprintf("Recorded %s assessment for %s", assessment.Status, assessment.VulnerabilityID),
+				err:     err,
+			}
+		case formFeedExport:
+			info, err := exportFeedBundle(m.ctx, m.database, values[0], time.Now().UTC().Truncate(time.Second))
+			return dashboardSavedMsg{
+				message: fmt.Sprintf("Exported offline feed to %s (%d packages)", info.Path, info.Packages),
+				err:     err,
+			}
+		case formFeedImport:
+			_, result, err := importFeedBundle(m.ctx, m.database, values[0])
+			return dashboardSavedMsg{
+				message: fmt.Sprintf("Imported offline feed: %d packages, %d vulnerabilities", result.Packages, result.Vulnerabilities),
 				err:     err,
 			}
 		default:
@@ -763,6 +1019,8 @@ func (m *dashboardModel) currentListLength() int {
 		return len(m.data.components)
 	case screenFindings:
 		return len(m.data.findings)
+	case screenFeeds:
+		return 3
 	default:
 		return 0
 	}
@@ -801,6 +1059,8 @@ func screenFromKey(key string) (dashboardScreen, bool) {
 		return screenFindings, true
 	case "6":
 		return screenScanner, true
+	case "7":
+		return screenFeeds, true
 	default:
 		return screenOverview, false
 	}
@@ -905,6 +1165,8 @@ func (m *dashboardModel) renderMain(width, height int) string {
 			content = m.renderFindings(innerWidth, innerHeight)
 		case screenScanner:
 			content = m.renderScanner(innerWidth, innerHeight)
+		case screenFeeds:
+			content = m.renderFeeds(innerWidth, innerHeight)
 		}
 	}
 	return panelStyle(width, height, !m.focusMenu).Render(content)
@@ -949,19 +1211,18 @@ func (m *dashboardModel) renderOverview(width, height int) string {
 	} else {
 		lines = append(lines, statusLine("●", "CISA KEV catalog", m.data.kevSync.SynchronizedAt.Format("2006-01-02 15:04Z"), true))
 	}
-	if height >= 12 {
-		lines = append(lines,
-			statusLine("○", "Offline vulnerability feed", "PLANNED", false),
-		)
+	if m.data.feedImport == nil {
+		lines = append(lines, statusLine("●", "Offline feed transfer", "READY", true))
+	} else {
+		lines = append(lines, statusLine(
+			"●", "Offline feed imported", m.data.feedImport.ImportedAt.Format("2006-01-02 15:04Z"), true,
+		))
 	}
 	if height >= 15 {
+		lines = append(lines, "", styleTitle.Render("Recommended next action"))
 		lines = append(lines,
-			"",
-			styleTitle.Render("Quick start"),
-			"  1. Press n to create a product",
-			"  2. Open Releases and press i to import its CycloneDX SBOM",
-			"  3. Press u to update local OSV and CISA KEV data, then scan",
-			"  4. Open Findings and press a to record the human decision",
+			"  "+styleKey.Render("Enter")+"  "+m.primaryActionText(),
+			styleMuted.Render("  Shortcuts remain available, but they are never required."),
 		)
 	}
 	if len(m.data.releases) > 0 && height > 17 {
@@ -972,6 +1233,21 @@ func (m *dashboardModel) renderOverview(width, height int) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (m *dashboardModel) primaryActionText() string {
+	switch {
+	case len(m.data.products) == 0:
+		return "Import your first shipped release with the guided setup"
+	case len(m.data.components) == 0:
+		return "Import a CycloneDX SBOM into a product release"
+	case m.data.sync == nil:
+		return "Update OSV and CISA KEV vulnerability intelligence"
+	case len(m.data.findings) > 0:
+		return "Review and assess potential-impact findings"
+	default:
+		return "Open the release scanner"
+	}
 }
 
 func metric(label string, value int) string {
@@ -1177,7 +1453,59 @@ func (m *dashboardModel) renderScanner(width, height int) string {
 	return strings.Join(lines, "\n")
 }
 
+func (m *dashboardModel) renderFeeds(width, height int) string {
+	lines := []string{
+		styleTitle.Render("Vulnerability feeds") + "  " + styleMuted.Render(dashboardScreens[screenFeeds].hint),
+		styleMuted.Render("Select an action and press Enter."),
+		"",
+	}
+	actions := []struct {
+		title       string
+		description string
+	}{
+		{"Update from internet", "Download inventory-scoped OSV matches and the CISA KEV catalog"},
+		{"Import trusted bundle", "Validate and activate a .bundle in a disconnected environment"},
+		{"Export current bundle", "Create a checksummed .bundle for controlled transfer"},
+	}
+	for index, action := range actions {
+		row := fmt.Sprintf("%-24s  %s", action.title, action.description)
+		lines = append(lines, selectableRow(fitText(row, width), index == m.selected[screenFeeds]))
+	}
+	lines = append(lines, "", styleTitle.Render("Current local data"))
+	if m.data.sync == nil {
+		lines = append(lines, styleWarn.Render("  OSV snapshot: not available"))
+	} else {
+		lines = append(lines, fmt.Sprintf("  OSV snapshot: %s  •  %d packages  •  %d vulnerabilities",
+			m.data.sync.SynchronizedAt.Format("2006-01-02 15:04Z"), m.data.sync.Packages, m.data.sync.Vulnerabilities))
+	}
+	if m.data.kevSync == nil {
+		lines = append(lines, styleWarn.Render("  CISA KEV: not available"))
+	} else {
+		lines = append(lines, fmt.Sprintf("  CISA KEV: %s  •  %d entries",
+			m.data.kevSync.SynchronizedAt.Format("2006-01-02 15:04Z"), m.data.kevSync.Entries))
+	}
+	if m.data.feedImport != nil && len(lines) < height-3 {
+		lines = append(lines, "", styleTitle.Render("Last bundle import"),
+			fitText("  "+m.data.feedImport.SourceName+"  •  imported "+m.data.feedImport.ImportedAt.Format("2006-01-02 15:04Z"), width),
+			fitText("  SHA-256: "+m.data.feedImport.ManifestSHA256, width),
+		)
+	}
+	if len(lines) < height-2 {
+		lines = append(lines, "", styleWarn.Render("Checksums detect corruption, not who created a bundle. Use a trusted transfer path."))
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (m *dashboardModel) renderForm(width int) string {
+	if m.pickingFile {
+		return strings.Join([]string{
+			styleTitle.Render("Choose a file"),
+			styleMuted.Render("Enter selects  •  ←/Backspace goes up  •  Esc cancels browser"),
+			styleMuted.Render(fitText(m.filePicker.CurrentDirectory, width)),
+			"",
+			m.filePicker.View(),
+		}, "\n")
+	}
 	lines := []string{
 		styleTitle.Render(m.form.title),
 		styleMuted.Render(fmt.Sprintf("Step %d of %d  •  Enter advances  •  Esc cancels", m.form.active+1, len(m.form.fields))),
@@ -1194,6 +1522,13 @@ func (m *dashboardModel) renderForm(width int) string {
 		}
 
 		lines = append(lines, styleBrand.Render("▸ "+field.label))
+		if len(field.choices) > 0 {
+			lines = append(lines,
+				"  "+styleKey.Render("←")+"  "+styleBrand.Render(field.input.Value())+"  "+styleKey.Render("→"),
+				styleMuted.Render("  "+field.hint),
+			)
+			continue
+		}
 		inputWidth := max(10, min(58, width))
 		field.input.SetWidth(max(6, inputWidth-4))
 		inputStyle := lipgloss.NewStyle().
@@ -1206,8 +1541,12 @@ func (m *dashboardModel) renderForm(width int) string {
 	lines = append(lines, "")
 	if m.loading {
 		message := " Saving locally..."
-		if m.form.kind == formSBOMImport {
+		if m.form.kind == formSBOMImport || m.form.kind == formQuickImport {
 			message = " Validating and importing SBOM..."
+		} else if m.form.kind == formFeedImport {
+			message = " Validating and importing offline feed..."
+		} else if m.form.kind == formFeedExport {
+			message = " Creating offline feed bundle..."
 		}
 		lines = append(lines, m.spinner.View()+message)
 	} else if m.form.err != nil {
@@ -1226,9 +1565,11 @@ func (m *dashboardModel) renderHelp(width int) string {
 		helpRow("↑/↓ or j/k", "Move through sections or rows"),
 		helpRow("←/→ or h/l", "Focus navigation or content"),
 		helpRow("Tab", "Switch between navigation and content"),
-		helpRow("1–6", "Open a section directly"),
+		helpRow("1–7", "Open a section directly"),
+		helpRow("Enter", "Run the highlighted or recommended action"),
 		helpRow("n", "Create an item for the current section"),
 		helpRow("i", "Import CycloneDX JSON from Releases"),
+		helpRow("Ctrl+O", "Browse for a file while a file-path field is active"),
 		helpRow("a / Enter", "Assess the selected finding"),
 		helpRow("s / Enter", "Scan the selected release"),
 		helpRow("u", "Update local OSV and CISA KEV data (uses internet)"),
@@ -1249,15 +1590,23 @@ func helpRow(key, description string) string {
 func (m *dashboardModel) renderFooter() string {
 	hints := []string{
 		styleKey.Render("↑↓") + " move",
-		styleKey.Render("→/enter") + " open",
-		styleKey.Render("n") + " new",
-		styleKey.Render("i") + " import",
-		styleKey.Render("a") + " assess",
-		styleKey.Render("s") + " scan",
-		styleKey.Render("u") + " sync",
-		styleKey.Render("?") + " help",
-		styleKey.Render("q") + " quit",
+		styleKey.Render("Enter") + " select",
 	}
+	switch m.screen {
+	case screenOverview:
+		hints[1] = styleKey.Render("Enter") + " next action"
+	case screenProducts, screenComponents:
+		hints = append(hints, styleKey.Render("n")+" new")
+	case screenReleases:
+		hints = append(hints, styleKey.Render("n")+" new", styleKey.Render("i")+" import SBOM")
+	case screenFindings:
+		hints[1] = styleKey.Render("Enter") + " assess"
+	case screenScanner:
+		hints[1] = styleKey.Render("Enter") + " scan"
+	case screenFeeds:
+		hints[1] = styleKey.Render("Enter") + " run action"
+	}
+	hints = append(hints, styleKey.Render("?")+" help", styleKey.Render("q")+" quit")
 	line := fitText(strings.Join(hints, "   "), m.width)
 	if m.status == "" {
 		return line

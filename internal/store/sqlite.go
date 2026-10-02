@@ -104,6 +104,7 @@ type SBOMImportMetadata struct {
 type ComponentImportResult struct {
 	Product        string `json:"product"`
 	ReleaseVersion string `json:"release"`
+	CreatedProduct bool   `json:"created_product,omitempty"`
 	CreatedRelease bool   `json:"created_release"`
 	Imported       int    `json:"imported"`
 	AlreadyPresent int    `json:"already_present"`
@@ -791,8 +792,40 @@ func (d *DB) ImportReleaseComponents(
 	components []ComponentInput,
 	metadata SBOMImportMetadata,
 ) (ComponentImportResult, error) {
+	return d.importReleaseComponents(ctx, productName, "", releaseVersion, components, metadata, false)
+}
+
+// ImportProductReleaseComponents creates a missing product and release when
+// necessary, then merges a validated SBOM component set into the release. The
+// complete onboarding import is committed atomically.
+func (d *DB) ImportProductReleaseComponents(
+	ctx context.Context,
+	productName string,
+	productDescription string,
+	releaseVersion string,
+	components []ComponentInput,
+	metadata SBOMImportMetadata,
+) (ComponentImportResult, error) {
+	return d.importReleaseComponents(
+		ctx, productName, productDescription, releaseVersion, components, metadata, true,
+	)
+}
+
+func (d *DB) importReleaseComponents(
+	ctx context.Context,
+	productName string,
+	productDescription string,
+	releaseVersion string,
+	components []ComponentInput,
+	metadata SBOMImportMetadata,
+	createMissingProduct bool,
+) (ComponentImportResult, error) {
 	var err error
 	productName, err = cleanIdentifier("product name", productName)
+	if err != nil {
+		return ComponentImportResult{}, err
+	}
+	productDescription, err = cleanDescription(productDescription)
 	if err != nil {
 		return ComponentImportResult{}, err
 	}
@@ -833,17 +866,38 @@ func (d *DB) ImportReleaseComponents(
 
 	var productID int64
 	var canonicalProduct string
+	createdProduct := false
 	err = transaction.QueryRowContext(ctx,
 		"SELECT id, name FROM products WHERE name = ? COLLATE NOCASE", productName,
 	).Scan(&productID, &canonicalProduct)
 	if errors.Is(err, sql.ErrNoRows) {
-		return ComponentImportResult{}, fmt.Errorf("product %q: %w", productName, ErrNotFound)
+		if !createMissingProduct {
+			return ComponentImportResult{}, fmt.Errorf("product %q: %w", productName, ErrNotFound)
+		}
+		createdAt := time.Now().UTC().Truncate(time.Second)
+		insert, insertErr := transaction.ExecContext(ctx,
+			"INSERT INTO products(name, description, created_at) VALUES (?, ?, ?)",
+			productName, productDescription, formatTime(createdAt),
+		)
+		if insertErr != nil {
+			return ComponentImportResult{}, fmt.Errorf("create product for SBOM import: %w", insertErr)
+		}
+		productID, err = insert.LastInsertId()
+		if err != nil {
+			return ComponentImportResult{}, fmt.Errorf("read imported product ID: %w", err)
+		}
+		canonicalProduct = productName
+		createdProduct = true
+		err = nil
 	}
 	if err != nil {
 		return ComponentImportResult{}, fmt.Errorf("find product for SBOM import: %w", err)
 	}
 
-	result := ComponentImportResult{Product: canonicalProduct, ReleaseVersion: releaseVersion}
+	result := ComponentImportResult{
+		Product: canonicalProduct, ReleaseVersion: releaseVersion,
+		CreatedProduct: createdProduct,
+	}
 	var releaseID int64
 	err = transaction.QueryRowContext(ctx,
 		"SELECT id FROM releases WHERE product_id = ? AND version = ?", productID, releaseVersion,

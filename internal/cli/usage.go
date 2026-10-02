@@ -24,6 +24,7 @@ Inventory commands:
   scan        Match a release and prioritize findings with local KEV data
   findings    List durable potential-impact findings
   assess      Record and inspect human impact decisions
+  doctor      Check local installation, inventory, and feed readiness
 
 Other commands:
   check       Query OSV for one package version
@@ -181,4 +182,15 @@ Usage:
 The dashboard reads and updates the same local SQLite inventory as the regular
 commands. On an interactive terminal, running "psirtmap" without a command
 opens the dashboard automatically.`)
+}
+
+func printDoctorUsage(writer io.Writer) {
+	fmt.Fprintln(writer, `Check the local PSIRTMap installation and scan readiness.
+
+Usage:
+  psirtmap [--database <path>] doctor [--json]
+
+Doctor reports the database path, inventory counts, vulnerability-data
+freshness, latest offline-feed import, and the next action when scanning is not
+ready.`)
 }

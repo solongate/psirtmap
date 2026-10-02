@@ -302,6 +302,51 @@ func TestImportReleaseComponentsIsAtomicAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestImportProductReleaseComponentsCreatesCompleteInventoryAtomically(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	components := []ComponentInput{{
+		Ecosystem: "Alpine", Name: "openssl", Version: "3.0.8-r0",
+		PURL: "pkg:apk/alpine/openssl@3.0.8-r0",
+	}}
+	metadata := SBOMImportMetadata{
+		Format: "CycloneDX JSON", SpecVersion: "1.6",
+		DocumentSHA256: strings.Repeat("a", 64), SourceName: "firmware.cdx.json",
+		Discovered: 1,
+	}
+	result, err := database.ImportProductReleaseComponents(
+		ctx, "Gateway-X", "Edge gateway", "1.0", components, metadata,
+	)
+	if err != nil {
+		t.Fatalf("ImportProductReleaseComponents() error = %v", err)
+	}
+	if !result.CreatedProduct || !result.CreatedRelease || result.Imported != 1 {
+		t.Fatalf("import result = %+v", result)
+	}
+	products, err := database.ListProducts(ctx)
+	if err != nil || len(products) != 1 || products[0].Description != "Edge gateway" {
+		t.Fatalf("products = %+v, %v", products, err)
+	}
+
+	badMetadata := metadata
+	badMetadata.DocumentSHA256 = "bad"
+	if _, err := database.ImportProductReleaseComponents(
+		ctx, "Rolled-Back", "", "1.0", components, badMetadata,
+	); err == nil {
+		t.Fatal("invalid atomic onboarding import succeeded")
+	}
+	products, err = database.ListProducts(ctx)
+	if err != nil || len(products) != 1 {
+		t.Fatalf("failed onboarding import changed products = %+v, %v", products, err)
+	}
+}
+
 func TestSchemaVersionOneMigratesWithoutLosingComponents(t *testing.T) {
 	t.Parallel()
 

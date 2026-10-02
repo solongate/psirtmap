@@ -816,7 +816,7 @@ func TestGlobalDatabaseOptionValidation(t *testing.T) {
 func TestInventoryHelpDoesNotCreateDatabase(t *testing.T) {
 	t.Parallel()
 
-	for _, command := range []string{"init", "product", "release", "component", "sync", "feed", "scan", "findings", "assess", "dashboard", "ui"} {
+	for _, command := range []string{"init", "product", "release", "component", "sync", "feed", "scan", "findings", "assess", "doctor", "dashboard", "ui"} {
 		command := command
 		t.Run(command, func(t *testing.T) {
 			t.Parallel()
@@ -830,6 +830,30 @@ func TestInventoryHelpDoesNotCreateDatabase(t *testing.T) {
 				t.Fatalf("help created database %q; stat error = %v", path, err)
 			}
 		})
+	}
+}
+
+func TestDoctorExplainsLocalReadiness(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "doctor.db")
+	exitCode, stdout, stderr := runWithDatabase(t, path, &inventoryQuerier{}, "doctor")
+	requireSuccess(t, exitCode, stderr)
+	for _, expected := range []string{
+		"PSIRTMAP DOCTOR", "Database status   READY", "OSV snapshot", "NOT SYNCED",
+		"Offline feed", "feature is available", "Scan readiness    NOT READY",
+	} {
+		if !strings.Contains(stdout, expected) {
+			t.Errorf("doctor stdout = %q, want %q", stdout, expected)
+		}
+	}
+
+	exitCode, stdout, stderr = runWithDatabase(t, path, &inventoryQuerier{}, "doctor", "--json")
+	requireSuccess(t, exitCode, stderr)
+	if !strings.Contains(stdout, `"ready_to_scan": false`) ||
+		!strings.Contains(stdout, `"version": "0.0.9"`) ||
+		!strings.Contains(stdout, `"next_action": "Import a CycloneDX product release with `) {
+		t.Fatalf("doctor JSON = %q", stdout)
 	}
 }
 

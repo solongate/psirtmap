@@ -19,6 +19,15 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Persistent bundle source, creation time, import time, source freshness, and
   manifest digest provenance.
 - Unit, rollback, and end-to-end offline scanning coverage.
+- Guided first-run import that creates a product, release, and component
+  inventory atomically from one CycloneDX JSON file.
+- A dashboard Feeds section with online update, trusted bundle import, and
+  bundle export actions.
+- Terminal file browsing for SBOM and feed bundle selection.
+- Choice-based assessment status selection in the dashboard.
+- `psirtmap doctor` for installation, inventory, feed, and scan-readiness
+  diagnostics.
+- Checksum-verifying macOS/Linux and Windows installation scripts.
 
 ### Changed
 
@@ -27,6 +36,13 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Database schema migrated to version 7 without changing inventory, findings,
   scan audits, or assessment history.
 - Version advanced to `0.0.9`.
+- The dashboard now presents a context-aware primary action and compact,
+  screen-specific controls; keyboard shortcuts remain optional.
+
+### Fixed
+
+- Replaced the stale dashboard claim that offline feeds were planned with
+  live feed capability and provenance status.
 
 ### Security
 

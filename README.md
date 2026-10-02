@@ -51,6 +51,8 @@ is useful evidence; it is not proof that a shipped product is exploitable.
 The current release, `v0.0.9`, includes:
 
 - A responsive, keyboard-driven terminal dashboard.
+- A guided first-run flow that creates a product, release, and component
+  inventory from one CycloneDX file.
 - Local SQLite inventory for products, releases, and components.
 - Atomic CycloneDX JSON import with package URL normalization and provenance.
 - Guided product, release, and component creation.
@@ -64,16 +66,41 @@ The current release, `v0.0.9`, includes:
   `not-affected`, and `fixed` decisions.
 - Reviewer, reason, evidence, timestamp, and complete decision history.
 - Versioned, checksummed offline feed export and atomic import.
+- Dashboard actions for online updates, offline feed import, and feed export.
 - Persistent bundle provenance, source freshness, and import timestamps.
 - An explicit `--live` scan mode for direct OSV checks.
 - Human-readable and deterministic JSON output.
 - Single-binary builds for macOS, Linux, and Windows.
+- Checksum-verifying installers and a local readiness doctor.
 - No account, database server, or PSIRTMap cloud service.
 
 See the [roadmap](ROADMAP.md) for the ordered path to VEX and later PSIRT
 workflow capabilities.
 
 ## Install
+
+Install the latest release on macOS or Linux:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/solongate/psirtmap/main/scripts/install.sh | sh
+```
+
+The installer selects the current platform archive, verifies its published
+SHA-256 checksum, and places `psirtmap` in a normal executable directory. You
+can [review the installer](scripts/install.sh) before running it.
+
+On Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/solongate/psirtmap/main/scripts/install.ps1 | iex
+```
+
+The Windows installer verifies the release checksum, installs the executable
+under the current user's local programs directory, and adds that directory to
+the user `PATH`.
+
+<details>
+<summary><strong>Other installation methods</strong></summary>
 
 Download the archive for your platform from the
 [latest release](https://github.com/solongate/psirtmap/releases/latest) and
@@ -85,6 +112,10 @@ Go users can install the latest tagged release directly:
 go install github.com/solongate/psirtmap@latest
 ```
 
+Ensure Go's binary directory is on `PATH` after `go install`.
+
+</details>
+
 PSIRTMap requires no SQLite installation or background service.
 
 ## Start in 60 seconds
@@ -95,18 +126,21 @@ Open the dashboard:
 $ psirtmap
 ```
 
-The first run creates `~/.psirtmap/psirtmap.db`. Use `n` to create a product,
-open **Releases**, and press `i` to import its CycloneDX JSON SBOM. Press `u`
-once to update the local OSV and CISA KEV data, then open **Scanner** and press `s`.
-Open **Findings**, select a match, and press `a` to record the human decision.
+That is the complete launch command. The first run creates
+`~/.psirtmap/psirtmap.db` and opens a guided setup. Press **Enter** and provide
+the product name, release version, and CycloneDX JSON file. The dashboard then
+guides you through updating vulnerability data, scanning the release, and
+reviewing findings. Shortcuts are optional.
 
 | Key | Action |
 |---|---|
 | `↑` / `↓` or `j` / `k` | Move through sections or rows |
 | `←` / `→` or `h` / `l` | Move between navigation and content |
-| `1`–`6` | Open a section directly |
+| `1`–`7` | Open a section directly |
+| `Enter` | Run the highlighted or recommended action |
 | `n` | Create an item in the current section |
 | `i` | Import CycloneDX JSON from **Releases** |
+| `Ctrl+O` | Browse for a file while a file field is active |
 | `a` or `Enter` | Assess the selected finding from **Findings** |
 | `u` | Update local OSV and CISA KEV data; this step uses the internet |
 | `s` or `Enter` | Scan the selected release |
@@ -172,6 +206,8 @@ psirtmap assess history AG-200@2.2 CVE-2026-12345 --json
 ```
 
 Run `psirtmap help` or `psirtmap <command> --help` for complete usage.
+Run `psirtmap doctor` to see the database path, inventory counts, feed
+freshness, and the next action required before scanning.
 
 </details>
 
