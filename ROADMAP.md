@@ -23,13 +23,13 @@ ordered so every release remains small, testable, and useful on its own.
 | KEV enrichment | Prioritize known exploitation | Shipped in `v0.0.8` |
 | Offline feeds | Scan from validated, transferable feed bundles | Shipped in `v0.0.9` |
 | Guided local UX | Install, launch, onboard, and transfer feeds without memorizing commands | Shipped in `v0.0.9` |
-| Foundation hardening | Backups, compatibility fixtures, output contracts, fuzz seeds, and dependency vulnerability checks | Unreleased |
-| Finding intelligence | Normalize severity and expose fixed boundaries, references, detail, filters, and deterministic priority | Unreleased |
+| Foundation hardening | Backups, compatibility fixtures, output contracts, fuzz seeds, and dependency vulnerability checks | Shipped in `v0.0.10` |
+| Finding intelligence | Normalize severity and expose fixed boundaries, references, detail, filters, and deterministic priority | Shipped in `v0.0.10` |
 | VEX | Export human assessments in a machine-readable format | Later |
 
-## Unreleased: foundation hardening
+## Shipped: foundation hardening
 
-The next data-model changes are gated by a dedicated safety layer:
+`v0.0.10` added a dedicated safety layer for future data-model changes:
 
 - Consistent, private backups before existing SQLite databases migrate.
 - A fixed v0.0.9 database fixture that future binaries must still read.
@@ -38,9 +38,9 @@ The next data-model changes are gated by a dedicated safety layer:
 - Reachability-aware Go vulnerability analysis in CI.
 - Maintained architecture and threat-model documents.
 
-## Unreleased: finding intelligence
+## Shipped: finding intelligence
 
-The next release turns a bare match into a useful triage record without
+`v0.0.10` turns a bare match into a useful triage record without
 pretending to make the human impact decision:
 
 - Parse supported OSV CVSS vectors and retain both normalized severity and the

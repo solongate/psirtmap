@@ -6,6 +6,8 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.10] - 2026-10-08
+
 ### Added
 
 - Normalized CVSS 2.0, 3.0, 3.1, and 4.0 severity for durable findings, with
@@ -27,6 +29,7 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Database schema migrated to version 8 while preserving v0.0.9 inventory,
   local intelligence, findings, and assessment history through a private
   pre-migration backup.
+- Version advanced to `0.0.10`.
 
 ### Security
 
@@ -237,7 +240,8 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Human-readable and JSON output.
 - Automated tests, cross-platform release builds, and Apache-2.0 licensing.
 
-[Unreleased]: https://github.com/solongate/psirtmap/compare/v0.0.9...HEAD
+[Unreleased]: https://github.com/solongate/psirtmap/compare/v0.0.10...HEAD
+[0.0.10]: https://github.com/solongate/psirtmap/compare/v0.0.9...v0.0.10
 [0.0.9]: https://github.com/solongate/psirtmap/compare/v0.0.8...v0.0.9
 [0.0.8]: https://github.com/solongate/psirtmap/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/solongate/psirtmap/compare/v0.0.6...v0.0.7
