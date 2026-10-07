@@ -309,6 +309,10 @@ contains shipped-product inventory, the active OSV and CISA KEV snapshots,
 feed-import provenance, scan audit records, durable finding history, and
 append-only human assessments.
 
+Before an existing database is migrated, PSIRTMap creates a consistent,
+permission-restricted backup beside it. If that backup cannot be completed,
+the migration does not start.
+
 Choose another database with either:
 
 ```sh
@@ -329,12 +333,15 @@ go vet ./...
 go build -o psirtmap .
 ```
 
-CI verifies formatting, dependencies, static analysis, race-enabled tests, and
-release builds for macOS, Linux, and Windows.
+CI verifies formatting, dependencies, known reachable Go vulnerabilities,
+static analysis, race-enabled tests, and release builds for macOS, Linux, and
+Windows.
 
 ## Project information
 
 - [Roadmap](ROADMAP.md) — product direction and explicit non-goals
+- [Architecture](docs/ARCHITECTURE.md) — components, data flow, and persistence invariants
+- [Threat model](docs/THREAT_MODEL.md) — trust boundaries, controls, and known limitations
 - [Security policy](SECURITY.md) — private vulnerability reporting
 - [Contributing](CONTRIBUTING.md) — issue and pull-request policy
 - [Changelog](CHANGELOG.md) — release history

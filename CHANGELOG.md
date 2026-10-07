@@ -6,6 +6,21 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Consistent, `0600` SQLite snapshots before existing databases are migrated.
+- A fixed v0.0.9 database compatibility fixture and automation-facing JSON
+  output contract tests.
+- Seed-corpus fuzz tests for CycloneDX JSON and offline feed bundle parsers.
+- Architecture and threat-model documentation for the current local-first
+  system.
+
+### Security
+
+- CI now runs the official Go vulnerability analyzer against reachable code
+  paths.
+- A backup failure now prevents schema migration from starting.
+
 ## [0.0.9] - 2026-10-01
 
 ### Added
