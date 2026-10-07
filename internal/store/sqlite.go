@@ -4,7 +4,9 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -270,6 +272,24 @@ func Open(ctx context.Context, path string) (*DB, error) {
 		sqlDB.Close()
 		return nil, err
 	}
+	currentVersion, err := database.schemaVersion(ctx)
+	if err != nil {
+		sqlDB.Close()
+		return nil, err
+	}
+	if currentVersion > schemaVersion {
+		sqlDB.Close()
+		return nil, fmt.Errorf(
+			"database schema version %d is newer than supported version %d",
+			currentVersion, schemaVersion,
+		)
+	}
+	if path != ":memory:" && currentVersion > 0 && currentVersion < schemaVersion {
+		if _, err := database.createMigrationBackup(ctx, currentVersion); err != nil {
+			sqlDB.Close()
+			return nil, err
+		}
+	}
 	if err := database.migrate(ctx); err != nil {
 		sqlDB.Close()
 		return nil, err
@@ -282,6 +302,53 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	}
 
 	return database, nil
+}
+
+func (d *DB) schemaVersion(ctx context.Context) (int, error) {
+	var version int
+	if err := d.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return 0, fmt.Errorf("read schema version: %w", err)
+	}
+	return version, nil
+}
+
+// createMigrationBackup creates a consistent, standalone SQLite snapshot
+// before an existing database is changed. VACUUM INTO includes committed WAL
+// content and refuses to overwrite an existing file.
+func (d *DB) createMigrationBackup(ctx context.Context, currentVersion int) (string, error) {
+	random := make([]byte, 8)
+	if _, err := rand.Read(random); err != nil {
+		return "", fmt.Errorf("name pre-migration database backup: %w", err)
+	}
+	backupPath := fmt.Sprintf(
+		"%s.pre-migration-v%d-to-v%d-%s.backup",
+		d.path, currentVersion, schemaVersion, hex.EncodeToString(random),
+	)
+	complete := false
+	defer func() {
+		if !complete {
+			_ = os.Remove(backupPath)
+		}
+	}()
+	if _, err := d.db.ExecContext(ctx, "VACUUM INTO ?", backupPath); err != nil {
+		return "", fmt.Errorf("create pre-migration database backup: %w", err)
+	}
+	if err := os.Chmod(backupPath, 0o600); err != nil {
+		return "", fmt.Errorf("secure pre-migration database backup: %w", err)
+	}
+	backup, err := os.Open(backupPath)
+	if err != nil {
+		return "", fmt.Errorf("open pre-migration database backup: %w", err)
+	}
+	if err := backup.Sync(); err != nil {
+		backup.Close()
+		return "", fmt.Errorf("flush pre-migration database backup: %w", err)
+	}
+	if err := backup.Close(); err != nil {
+		return "", fmt.Errorf("close pre-migration database backup: %w", err)
+	}
+	complete = true
+	return backupPath, nil
 }
 
 func (d *DB) configure(ctx context.Context) error {

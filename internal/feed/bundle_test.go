@@ -15,6 +15,28 @@ import (
 	"github.com/solongate/psirtmap/internal/store"
 )
 
+func FuzzReadBundle(f *testing.F) {
+	createdAt := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	seedPath := filepath.Join(f.TempDir(), "valid.bundle")
+	if _, err := Write(seedPath, "PSIRTMap fuzz seed", testSnapshot(createdAt), createdAt); err != nil {
+		f.Fatalf("create valid fuzz seed: %v", err)
+	}
+	valid, err := os.ReadFile(seedPath)
+	if err != nil {
+		f.Fatalf("read valid fuzz seed: %v", err)
+	}
+	f.Add(valid)
+	f.Add([]byte("not-a-zip"))
+	f.Add([]byte{})
+	f.Fuzz(func(t *testing.T, data []byte) {
+		path := filepath.Join(t.TempDir(), "input.bundle")
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatalf("write fuzz bundle: %v", err)
+		}
+		_, _, _ = Read(path)
+	})
+}
+
 func TestBundleRoundTripAndNoOverwrite(t *testing.T) {
 	t.Parallel()
 	createdAt := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)

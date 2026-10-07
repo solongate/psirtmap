@@ -23,7 +23,19 @@ ordered so every release remains small, testable, and useful on its own.
 | KEV enrichment | Prioritize known exploitation | Shipped in `v0.0.8` |
 | Offline feeds | Scan from validated, transferable feed bundles | Shipped in `v0.0.9` |
 | Guided local UX | Install, launch, onboard, and transfer feeds without memorizing commands | Shipped in `v0.0.9` |
+| Foundation hardening | Backups, compatibility fixtures, output contracts, fuzz seeds, and dependency vulnerability checks | Unreleased |
 | VEX | Export human assessments in a machine-readable format | Later |
+
+## Unreleased: foundation hardening
+
+The next data-model changes are gated by a dedicated safety layer:
+
+- Consistent, private backups before existing SQLite databases migrate.
+- A fixed v0.0.9 database fixture that future binaries must still read.
+- Contract tests for automation-facing JSON output.
+- Seed-corpus fuzz tests for CycloneDX and offline feed parsers.
+- Reachability-aware Go vulnerability analysis in CI.
+- Maintained architecture and threat-model documents.
 
 ## Shipped: CycloneDX import
 

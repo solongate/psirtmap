@@ -3,4 +3,5 @@
 *.db
 *.db-shm
 *.db-wal
+*.pre-migration-*.backup
 .DS_Store

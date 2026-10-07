@@ -61,3 +61,6 @@ Until signed bundles and trusted-key policy are available, import feed bundles
 only through an approved transfer process from a staging machine you control.
 Treat an unexpected checksum failure, manifest error, or source timestamp as a
 reason to reject the bundle and investigate the transfer path.
+
+The maintained [threat model](docs/THREAT_MODEL.md) documents current trust
+boundaries, implemented controls, operator responsibilities, and limitations.

@@ -1,11 +1,22 @@
 package sbom
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
 	packageurl "github.com/package-url/packageurl-go"
 )
+
+func FuzzParseCycloneDX(f *testing.F) {
+	f.Add([]byte(`{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"components":[{"type":"library","name":"demo","version":"1.0.0","purl":"pkg:npm/demo@1.0.0"}]}`))
+	f.Add([]byte(`{"bomFormat":"CycloneDX","specVersion":"1.2","version":1}`))
+	f.Add([]byte("not-json"))
+	f.Add([]byte{})
+	f.Fuzz(func(t *testing.T, data []byte) {
+		_, _ = Parse(bytes.NewReader(data))
+	})
+}
 
 func TestParseCycloneDXMapsPURLsAndNestedComponents(t *testing.T) {
 	t.Parallel()

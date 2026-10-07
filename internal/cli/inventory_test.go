@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -85,6 +86,24 @@ func requireSuccess(t *testing.T, exitCode int, stderr string) {
 	if exitCode != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr = %q", exitCode, stderr)
 	}
+}
+
+func requireJSONObjectKeys(t *testing.T, output string, want ...string) map[string]any {
+	t.Helper()
+	var object map[string]any
+	if err := json.Unmarshal([]byte(output), &object); err != nil {
+		t.Fatalf("decode JSON object %q: %v", output, err)
+	}
+	got := make([]string, 0, len(object))
+	for key := range object {
+		got = append(got, key)
+	}
+	sort.Strings(got)
+	sort.Strings(want)
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("JSON keys = %v, want %v; output = %s", got, want, output)
+	}
+	return object
 }
 
 func TestInventoryCLIWorkflowAndScan(t *testing.T) {
@@ -367,19 +386,16 @@ func TestOfflineFeedExportImportWorkflow(t *testing.T) {
 	}
 }
 
-func TestInventoryJSONOutputIsStable(t *testing.T) {
+func TestInventoryJSONOutputContract(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "inventory.db")
 	querier := &inventoryQuerier{results: map[string]packageResult{}}
 	exitCode, stdout, stderr := runWithDatabase(
-		t, path, querier, "product", "add", "Gateway", "--json",
+		t, path, querier, "product", "add", "Gateway", "--description", "Edge gateway", "--json",
 	)
 	requireSuccess(t, exitCode, stderr)
-	var product map[string]any
-	if err := json.Unmarshal([]byte(stdout), &product); err != nil {
-		t.Fatalf("decode product JSON %q: %v", stdout, err)
-	}
+	product := requireJSONObjectKeys(t, stdout, "name", "description", "created_at")
 	if product["name"] != "Gateway" {
 		t.Fatalf("product JSON = %#v", product)
 	}
@@ -388,6 +404,10 @@ func TestInventoryJSONOutputIsStable(t *testing.T) {
 	requireSuccess(t, exitCode, stderr)
 	exitCode, stdout, stderr = runWithDatabase(t, path, querier, "scan", "Gateway@1.0", "--json")
 	requireSuccess(t, exitCode, stderr)
+	requireJSONObjectKeys(
+		t, stdout, "product", "release", "components", "data_source", "persisted",
+		"new", "existing", "reopened", "no_longer_matched", "known_exploited", "findings",
+	)
 	var scan struct {
 		Product    string            `json:"product"`
 		Release    string            `json:"release"`
@@ -850,6 +870,10 @@ func TestDoctorExplainsLocalReadiness(t *testing.T) {
 
 	exitCode, stdout, stderr = runWithDatabase(t, path, &inventoryQuerier{}, "doctor", "--json")
 	requireSuccess(t, exitCode, stderr)
+	requireJSONObjectKeys(
+		t, stdout, "version", "database", "products", "releases", "components",
+		"active_findings", "ready_to_scan", "next_action",
+	)
 	if !strings.Contains(stdout, `"ready_to_scan": false`) ||
 		!strings.Contains(stdout, `"version": "0.0.9"`) ||
 		!strings.Contains(stdout, `"next_action": "Import a CycloneDX product release with `) {

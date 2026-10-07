@@ -381,6 +381,35 @@ func TestSchemaVersionOneMigratesWithoutLosingComponents(t *testing.T) {
 		t.Fatalf("Open(v1) error = %v", err)
 	}
 	defer database.Close()
+	backups, err := filepath.Glob(path + ".pre-migration-v1-to-v7-*.backup")
+	if err != nil {
+		t.Fatalf("find migration backup: %v", err)
+	}
+	if len(backups) != 1 {
+		t.Fatalf("migration backups = %v, want exactly one", backups)
+	}
+	backupInfo, err := os.Stat(backups[0])
+	if err != nil {
+		t.Fatalf("stat migration backup: %v", err)
+	}
+	if backupInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("migration backup permissions = %o, want 600", backupInfo.Mode().Perm())
+	}
+	backup, err := sql.Open("sqlite", backups[0])
+	if err != nil {
+		t.Fatalf("open migration backup: %v", err)
+	}
+	defer backup.Close()
+	var backupVersion, backupComponents int
+	if err := backup.QueryRowContext(ctx, "PRAGMA user_version").Scan(&backupVersion); err != nil {
+		t.Fatalf("read backup schema version: %v", err)
+	}
+	if err := backup.QueryRowContext(ctx, "SELECT COUNT(*) FROM components").Scan(&backupComponents); err != nil {
+		t.Fatalf("read backup components: %v", err)
+	}
+	if backupVersion != 1 || backupComponents != 1 {
+		t.Fatalf("migration backup version/components = %d/%d, want 1/1", backupVersion, backupComponents)
+	}
 	components, err := database.ListComponents(ctx, "AG-200", "2.2")
 	if err != nil || len(components) != 1 || components[0].Name != "openssl" || components[0].PURL != "" {
 		t.Fatalf("migrated components = %+v, %v", components, err)
@@ -391,6 +420,92 @@ func TestSchemaVersionOneMigratesWithoutLosingComponents(t *testing.T) {
 	}
 	if version != schemaVersion {
 		t.Fatalf("schema version = %d, want %d", version, schemaVersion)
+	}
+}
+
+func TestCurrentSchemaDoesNotCreateMigrationBackup(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "current.db")
+	database, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database, err = Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	backups, err := filepath.Glob(path + ".pre-migration-*.backup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) != 0 {
+		t.Fatalf("current schema created migration backups: %v", backups)
+	}
+}
+
+func TestVersion009DatabaseFixtureRemainsReadable(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "v0.0.9.db")
+	script, err := os.ReadFile(filepath.Join("testdata", "v0.0.9.sql"))
+	if err != nil {
+		t.Fatalf("read v0.0.9 fixture: %v", err)
+	}
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(ctx, string(script)); err != nil {
+		raw.Close()
+		t.Fatalf("create v0.0.9 fixture: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	database, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open(v0.0.9) error = %v", err)
+	}
+	defer database.Close()
+
+	products, err := database.ListProducts(ctx)
+	if err != nil || len(products) != 1 || products[0].Name != "AG-200" {
+		t.Fatalf("v0.0.9 products = %+v, %v", products, err)
+	}
+	components, err := database.ListComponents(ctx, "AG-200", "2.2")
+	if err != nil || len(components) != 1 || components[0].PURL != "pkg:apk/alpine/openssl@3.0.8" {
+		t.Fatalf("v0.0.9 components = %+v, %v", components, err)
+	}
+	pkg := PackageVersion{Ecosystem: "Alpine", Name: "openssl", Version: "3.0.8"}
+	vulnerabilities, _, err := database.LookupOSVSnapshot(ctx, pkg)
+	if err != nil || len(vulnerabilities) != 1 || vulnerabilities[0].ID != "OSV-2026-1" {
+		t.Fatalf("v0.0.9 OSV snapshot = %+v, %v", vulnerabilities, err)
+	}
+	findings, err := database.ListFindings(ctx, FindingFilter{})
+	if err != nil || len(findings) != 1 || findings[0].Status != AssessmentNotAffected || !findings[0].KnownExploited {
+		t.Fatalf("v0.0.9 findings = %+v, %v", findings, err)
+	}
+	history, err := database.ListAssessments(ctx, AssessmentFilter{})
+	if err != nil || len(history) != 1 || history[0].Reason != "Feature disabled" {
+		t.Fatalf("v0.0.9 assessments = %+v, %v", history, err)
+	}
+	feedImport, err := database.LatestFeedImport(ctx)
+	if err != nil || feedImport.SourceName != "fixture.bundle" || feedImport.KEVEntries != 1 {
+		t.Fatalf("v0.0.9 feed import = %+v, %v", feedImport, err)
+	}
+	backups, err := filepath.Glob(path + ".pre-migration-*.backup")
+	if err != nil || len(backups) != 0 {
+		t.Fatalf("v0.0.9 fixture unexpectedly migrated; backups = %v, error = %v", backups, err)
 	}
 }
 
