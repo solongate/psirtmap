@@ -37,15 +37,22 @@ type Package struct {
 // package and range data is retained even when the current match was obtained
 // from OSV's exact package-version query endpoint.
 type Vulnerability struct {
-	ID        string     `json:"id"`
-	Summary   string     `json:"summary,omitempty"`
-	Details   string     `json:"details,omitempty"`
-	Aliases   []string   `json:"aliases,omitempty"`
-	Published string     `json:"published,omitempty"`
-	Modified  string     `json:"modified,omitempty"`
-	Withdrawn string     `json:"withdrawn,omitempty"`
-	Severity  []Severity `json:"severity,omitempty"`
-	Affected  []Affected `json:"affected,omitempty"`
+	ID         string      `json:"id"`
+	Summary    string      `json:"summary,omitempty"`
+	Details    string      `json:"details,omitempty"`
+	Aliases    []string    `json:"aliases,omitempty"`
+	Published  string      `json:"published,omitempty"`
+	Modified   string      `json:"modified,omitempty"`
+	Withdrawn  string      `json:"withdrawn,omitempty"`
+	Severity   []Severity  `json:"severity,omitempty"`
+	Affected   []Affected  `json:"affected,omitempty"`
+	References []Reference `json:"references,omitempty"`
+}
+
+// Reference is one source-provided URL associated with an OSV record.
+type Reference struct {
+	Type string `json:"type"`
+	URL  string `json:"url"`
 }
 
 // Severity contains an OSV severity type and its score or vector.
@@ -241,6 +248,7 @@ func mergeVulnerabilityGroup(records []Vulnerability) Vulnerability {
 	identifiers := make(map[string]struct{})
 	severitySet := make(map[Severity]struct{})
 	affectedSet := make(map[string]Affected)
+	referenceSet := make(map[Reference]struct{})
 	var merged Vulnerability
 	for _, record := range records {
 		if record.ID != "" {
@@ -269,6 +277,13 @@ func mergeVulnerabilityGroup(records []Vulnerability) Vulnerability {
 			encoded, err := json.Marshal(affected)
 			if err == nil {
 				affectedSet[string(encoded)] = affected
+			}
+		}
+		for _, reference := range record.References {
+			reference.Type = strings.TrimSpace(reference.Type)
+			reference.URL = strings.TrimSpace(reference.URL)
+			if reference.URL != "" {
+				referenceSet[reference] = struct{}{}
 			}
 		}
 	}
@@ -314,6 +329,18 @@ func mergeVulnerabilityGroup(records []Vulnerability) Vulnerability {
 		for _, key := range keys {
 			merged.Affected = append(merged.Affected, affectedSet[key])
 		}
+	}
+	if len(referenceSet) > 0 {
+		merged.References = make([]Reference, 0, len(referenceSet))
+		for reference := range referenceSet {
+			merged.References = append(merged.References, reference)
+		}
+		sort.Slice(merged.References, func(i, j int) bool {
+			if merged.References[i].Type != merged.References[j].Type {
+				return merged.References[i].Type < merged.References[j].Type
+			}
+			return merged.References[i].URL < merged.References[j].URL
+		})
 	}
 	return merged
 }

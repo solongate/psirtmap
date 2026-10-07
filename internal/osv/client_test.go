@@ -208,7 +208,8 @@ func TestQueryMergesAliasRecordsIntoCanonicalVulnerability(t *testing.T) {
 					"aliases": ["CVE-2020-28493", "GHSA-g3rq-g295-4j3m"],
 					"published": "2021-02-01T00:00:00Z",
 					"modified": "2022-01-01T00:00:00Z",
-					"severity": [{"type":"CVSS_V3","score":"score-a"}]
+					"severity": [{"type":"CVSS_V3","score":"score-a"}],
+					"references": [{"type":"ADVISORY","url":"https://example.test/advisory"}]
 				},
 				{
 					"id": "GHSA-g3rq-g295-4j3m",
@@ -219,6 +220,10 @@ func TestQueryMergesAliasRecordsIntoCanonicalVulnerability(t *testing.T) {
 					"severity": [
 						{"type":"CVSS_V3","score":"score-a"},
 						{"type":"CVSS_V4","score":"score-b"}
+					],
+					"references": [
+						{"type":"ADVISORY","url":"https://example.test/advisory"},
+						{"type":"WEB","url":"https://example.test/report"}
 					]
 				}
 			]
@@ -251,6 +256,9 @@ func TestQueryMergesAliasRecordsIntoCanonicalVulnerability(t *testing.T) {
 	}
 	if len(vulnerability.Severity) != 2 {
 		t.Fatalf("severity = %+v", vulnerability.Severity)
+	}
+	if len(vulnerability.References) != 2 || vulnerability.References[1].URL != "https://example.test/report" {
+		t.Fatalf("references = %+v", vulnerability.References)
 	}
 }
 

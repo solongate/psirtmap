@@ -36,6 +36,7 @@ service.
 | SQLite store | Persist inventory, intelligence, scans, findings, and append-only assessments |
 | OSV client | Query exact ecosystem, package, and version combinations |
 | CISA KEV client | Download and validate known-exploitation context |
+| Finding intelligence | Normalize supported CVSS vectors and extract package-specific fixed boundaries and safe references |
 | Local matcher | Read saved package-version matches without a network request |
 | Feed bundle | Move OSV and KEV snapshots through a controlled offline transfer |
 
@@ -51,13 +52,20 @@ multi-table writes themselves.
    OSV, and downloads the CISA KEV catalog.
 3. Both validated snapshots are committed locally. A failed update preserves
    the previous usable data.
-4. `psirtmap scan product@release` reads the local snapshot, reconciles
-   durable findings, and never contacts a remote source.
+4. `psirtmap scan product@release` reads the local snapshot, derives
+   deterministic triage context, reconciles durable findings, and never
+   contacts a remote source.
 5. A person records the product-impact decision and evidence as an append-only
    assessment.
 
 The normal result is a **potential match**, not an automatic exploitability
 decision.
+
+Finding priority is deliberately explainable: CISA KEV membership, normalized
+severity, OSV modification/publication time, then stable identity fields. No
+opaque score or AI model is involved. CVSS parsing preserves the source vector;
+missing or invalid vectors remain `unknown`. Fixed versions are range
+boundaries reported by OSV, not product-specific remediation decisions.
 
 ## Network behavior
 

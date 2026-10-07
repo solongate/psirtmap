@@ -74,6 +74,11 @@ The current release, `v0.0.9`, includes:
 - Checksum-verifying installers and a local readiness doctor.
 - No account, database server, or PSIRTMap cloud service.
 
+The unreleased main branch also adds normalized CVSS severity, fixed-version
+boundaries, advisory references, KEV-first prioritization, severity/KEV
+filters, and a detailed finding view. Missing or invalid CVSS data is shown as
+`UNKNOWN`; PSIRTMap does not invent a score.
+
 See the [roadmap](ROADMAP.md) for the ordered path to VEX and later PSIRT
 workflow capabilities.
 
@@ -167,6 +172,9 @@ psirtmap release import AG-200@2.2 ./firmware-2.2.cdx.json
 psirtmap sync
 psirtmap scan AG-200@2.2
 psirtmap findings AG-200@2.2
+psirtmap findings AG-200@2.2 --severity critical
+psirtmap findings AG-200@2.2 --kev
+psirtmap findings show AG-200@2.2 CVE-2026-12345
 psirtmap assess AG-200@2.2 CVE-2026-12345 \
   --status not-affected \
   --reviewer emirhan \
@@ -202,6 +210,7 @@ psirtmap feed export ./psirtmap-feed.bundle --json
 psirtmap feed import ./psirtmap-feed.bundle --json
 psirtmap scan AG-200@2.2 --json
 psirtmap findings --all --json
+psirtmap findings show AG-200@2.2 CVE-2026-12345 --json
 psirtmap assess history AG-200@2.2 CVE-2026-12345 --json
 ```
 
@@ -235,8 +244,10 @@ AG-200
 
 During `sync`, PSIRTMap sends each distinct component ecosystem, package name,
 and version to OSV. It stores the matching advisory metadata, aliases,
-severity, affected ranges, retrieval time, and exact package-version match in
-SQLite. It also downloads [CISA's complete public KEV catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog)
+CVSS vectors, affected ranges, fixed boundaries, references, retrieval time,
+and exact package-version match in SQLite. Supported CVSS 2.0, 3.0, 3.1, and
+4.0 vectors are normalized into a severity label without changing the source
+vector. It also downloads [CISA's complete public KEV catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog)
 and stores the catalog version, freshness, CVE metadata, required action, due
 date, and ransomware-use signal. Product names, release names, descriptions,
 and complete SBOM files are not sent to either source.
@@ -248,6 +259,11 @@ that a particular product configuration is exploitable. A new or changed
 component needs another successful `sync`; a failed source update preserves
 the last known-good local data. `check`, `sync`, `feed pull`, and `scan --live`
 are the operations that require internet access.
+
+Finding lists put KEV matches first, followed by normalized severity and
+source recency. An OSV fixed boundary means that a source range ends at that
+version; it is not an automatic recommendation or proof that upgrading alone
+remediates a particular product.
 
 ## Air-gapped transfer
 

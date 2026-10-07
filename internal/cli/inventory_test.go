@@ -266,6 +266,110 @@ func TestCISAKEVSyncEnrichesScanAndPersistedFindings(t *testing.T) {
 	}
 }
 
+func TestFindingIntelligencePrioritizesFiltersAndShowsDetails(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "intelligence.db")
+	querier := &inventoryQuerier{results: map[string]packageResult{
+		"Alpine:openssl@3.0.8": {vulnerabilities: []osv.Vulnerability{
+			{
+				ID: "CVE-2026-CRITICAL", Summary: "Critical but not known exploited",
+				Published: "2026-09-01T00:00:00Z", Modified: "2026-10-01T00:00:00Z",
+				Severity: []osv.Severity{{Type: "CVSS_V4", Score: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"}},
+				Affected: []osv.Affected{{
+					Package: osv.Package{Ecosystem: "Alpine", Name: "openssl"},
+					Ranges:  []osv.Range{{Type: "ECOSYSTEM", Events: []osv.RangeEvent{{Introduced: "0"}, {Fixed: "3.0.9"}}}},
+				}},
+				References: []osv.Reference{{Type: "ADVISORY", URL: "https://example.test/CVE-2026-CRITICAL"}},
+			},
+			{
+				ID: "GHSA-KEV-HIGH", Aliases: []string{"CVE-2026-42424"}, Summary: "High and known exploited",
+				Published: "2026-08-01T00:00:00Z", Modified: "2026-09-01T00:00:00Z",
+				Severity: []osv.Severity{{Type: "CVSS_V3", Score: "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N"}},
+			},
+		}},
+	}}
+	kevFetcher := &inventoryKEVFetcher{catalog: kev.Catalog{
+		CatalogVersion: "2026.10.07", DateReleased: "2026-10-07T12:00:00Z", Count: 1,
+		SourceURL: "https://www.cisa.gov/test-kev.json",
+		Vulnerabilities: []kev.Vulnerability{{
+			CVEID: "CVE-2026-42424", VendorProject: "OpenSSL", Product: "OpenSSL",
+			VulnerabilityName: "Known exploited issue", DateAdded: "2026-10-01",
+			ShortDescription: "Known exploitation test record.",
+			RequiredAction:   "Apply vendor mitigations.", DueDate: "2026-10-22",
+		}},
+	}}
+	for _, arguments := range [][]string{
+		{"product", "add", "Gateway"},
+		{"release", "add", "Gateway", "1.0"},
+		{"component", "add", "Gateway@1.0", "openssl@3.0.8", "--ecosystem", "Alpine"},
+		{"sync"},
+	} {
+		exitCode, _, stderr := runWithSourcesDatabase(t, path, querier, kevFetcher, arguments...)
+		requireSuccess(t, exitCode, stderr)
+	}
+
+	exitCode, stdout, stderr := runWithSourcesDatabase(t, path, querier, kevFetcher, "scan", "Gateway@1.0")
+	requireSuccess(t, exitCode, stderr)
+	for _, expected := range []string{"SEVERITY", "CRITICAL", "HIGH", "Known exploited  1"} {
+		if !strings.Contains(stdout, expected) {
+			t.Errorf("scan stdout = %q, want %q", stdout, expected)
+		}
+	}
+	if strings.Index(stdout, "GHSA-KEV-HIGH") > strings.Index(stdout, "CVE-2026-CRITICAL") {
+		t.Fatalf("KEV finding was not prioritized: %q", stdout)
+	}
+
+	exitCode, stdout, stderr = runWithSourcesDatabase(t, path, querier, kevFetcher,
+		"findings", "Gateway@1.0", "--severity", "critical", "--json")
+	requireSuccess(t, exitCode, stderr)
+	var critical []struct {
+		ID            string          `json:"id"`
+		Severity      string          `json:"severity"`
+		CVSSScore     *float64        `json:"cvss_score"`
+		FixedVersions []string        `json:"fixed_versions"`
+		References    []osv.Reference `json:"references"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &critical); err != nil {
+		t.Fatalf("decode critical findings %q: %v", stdout, err)
+	}
+	if len(critical) != 1 || critical[0].ID != "CVE-2026-CRITICAL" ||
+		critical[0].Severity != "critical" || critical[0].CVSSScore == nil ||
+		len(critical[0].FixedVersions) != 1 || critical[0].FixedVersions[0] != "3.0.9" ||
+		len(critical[0].References) != 1 {
+		t.Fatalf("critical finding = %+v", critical)
+	}
+
+	exitCode, stdout, stderr = runWithSourcesDatabase(t, path, querier, kevFetcher,
+		"findings", "Gateway@1.0", "--kev", "--json")
+	requireSuccess(t, exitCode, stderr)
+	if !strings.Contains(stdout, "GHSA-KEV-HIGH") || strings.Contains(stdout, "CVE-2026-CRITICAL") {
+		t.Fatalf("KEV filter stdout = %q", stdout)
+	}
+
+	exitCode, stdout, stderr = runWithSourcesDatabase(t, path, querier, kevFetcher,
+		"findings", "show", "Gateway@1.0", "CVE-2026-CRITICAL")
+	requireSuccess(t, exitCode, stderr)
+	for _, expected := range []string{
+		"CRITICAL (9.3, CVSS 4.0)", "Fixed boundary: 3.0.9",
+		"https://example.test/CVE-2026-CRITICAL", "Potential impact only",
+	} {
+		if !strings.Contains(stdout, expected) {
+			t.Errorf("finding detail stdout = %q, want %q", stdout, expected)
+		}
+	}
+
+	exitCode, stdout, stderr = runWithSourcesDatabase(t, path, querier, kevFetcher,
+		"findings", "show", "Gateway@1.0", "CVE-2026-CRITICAL", "--json")
+	requireSuccess(t, exitCode, stderr)
+	requireJSONObjectKeys(t, stdout,
+		"finding_id", "product", "release", "ecosystem", "component", "component_version",
+		"id", "aliases", "summary", "severity", "cvss_score", "cvss_version", "cvss_vector",
+		"published", "modified", "fixed_versions", "references", "source", "status",
+		"match_status", "active", "first_seen_at", "last_seen_at", "known_exploited",
+	)
+}
+
 func TestCISAKEVFailurePreservesLastSuccessfulIntelligence(t *testing.T) {
 	t.Parallel()
 
@@ -325,7 +429,13 @@ func TestOfflineFeedExportImportWorkflow(t *testing.T) {
 	querier := &inventoryQuerier{results: map[string]packageResult{
 		"npm:demo@1.0.0": {vulnerabilities: []osv.Vulnerability{{
 			ID: "GHSA-DEMO-2026", Aliases: []string{"CVE-2026-12345"},
-			Summary: "Portable test vulnerability",
+			Summary:  "Portable test vulnerability",
+			Severity: []osv.Severity{{Type: "CVSS_V3", Score: "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N"}},
+			Affected: []osv.Affected{{
+				Package: osv.Package{Ecosystem: "npm", Name: "demo"},
+				Ranges:  []osv.Range{{Events: []osv.RangeEvent{{Fixed: "1.0.1"}}}},
+			}},
+			References: []osv.Reference{{Type: "ADVISORY", URL: "https://example.test/advisory"}},
 		}}},
 	}}
 	kevFetcher := &inventoryKEVFetcher{catalog: kev.Catalog{
@@ -379,9 +489,17 @@ func TestOfflineFeedExportImportWorkflow(t *testing.T) {
 	}
 	exitCode, stdout, stderr = runWithSourcesDatabase(t, targetDB, nil, nil, "scan", "gateway@1.0")
 	requireSuccess(t, exitCode, stderr)
-	for _, expected := range []string{"GHSA-DEMO-2026", "Known exploited  1", "YES"} {
+	for _, expected := range []string{"GHSA-DEMO-2026", "Known exploited  1", "YES", "HIGH"} {
 		if !strings.Contains(stdout, expected) {
 			t.Errorf("offline scan stdout = %q, want %q", stdout, expected)
+		}
+	}
+	exitCode, stdout, stderr = runWithSourcesDatabase(t, targetDB, nil, nil,
+		"findings", "show", "gateway@1.0", "CVE-2026-12345")
+	requireSuccess(t, exitCode, stderr)
+	for _, expected := range []string{"HIGH (8.1, CVSS 3.1)", "Fixed boundary: 1.0.1", "https://example.test/advisory"} {
+		if !strings.Contains(stdout, expected) {
+			t.Errorf("offline finding detail = %q, want %q", stdout, expected)
 		}
 	}
 }
@@ -799,13 +917,27 @@ func TestAssessmentCLIRequiresComponentWhenFindingIsAmbiguous(t *testing.T) {
 		requireSuccess(t, exitCode, stderr)
 	}
 	exitCode, _, stderr := runWithDatabase(t, path, querier,
+		"findings", "show", "gateway@1.0", "CVE-2026-SHARED",
+	)
+	if exitCode != 1 || !strings.Contains(stderr, "matches 2 components") {
+		t.Fatalf("ambiguous finding detail = code %d, stderr %q", exitCode, stderr)
+	}
+	exitCode, stdout, stderr := runWithDatabase(t, path, querier,
+		"findings", "show", "gateway@1.0", "CVE-2026-SHARED",
+		"--component", "npm:pkg-a@1.0",
+	)
+	requireSuccess(t, exitCode, stderr)
+	if !strings.Contains(stdout, "npm:pkg-a@1.0") {
+		t.Fatalf("component finding detail stdout = %q", stdout)
+	}
+	exitCode, _, stderr = runWithDatabase(t, path, querier,
 		"assess", "gateway@1.0", "CVE-2026-SHARED",
 		"--status", "investigating", "--reviewer", "emirhan",
 	)
 	if exitCode != 1 || !strings.Contains(stderr, "multiple components") {
 		t.Fatalf("ambiguous assessment = code %d, stderr %q", exitCode, stderr)
 	}
-	exitCode, stdout, stderr := runWithDatabase(t, path, querier,
+	exitCode, stdout, stderr = runWithDatabase(t, path, querier,
 		"assess", "gateway@1.0", "CVE-2026-SHARED",
 		"--status", "investigating", "--reviewer", "emirhan",
 		"--component", "npm:pkg-a@1.0",

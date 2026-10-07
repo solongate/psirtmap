@@ -143,12 +143,22 @@ func printFindingsUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `List findings saved by local release scans.
 
 Usage:
-  psirtmap findings [product@release] [--status <status>] [--all] [--json]
+
+  psirtmap findings [product@release] [--status <status>]
+    [--severity <severity>] [--kev] [--all] [--json]
+
+  psirtmap findings show <product@release> <vulnerability-id>
+    [--component <ecosystem:package@version>] [--json]
 
 By default only active matches are shown. Use --all to include findings that no
 longer match the current local OSV snapshot. Live scans are diagnostic and are
-never written to the finding history. The KEV column is prioritization context,
-not proof that a shipped product is exploitable.`)
+never written to the finding history. Results are prioritized by CISA KEV,
+severity, and disclosure recency. Severity values are unknown, none, low,
+medium, high, and critical. Use --kev to show known-exploited entries only.
+
+The KEV and CVSS fields are prioritization context, not proof that a shipped
+product is exploitable. Fixed boundaries come from OSV source records and do
+not replace a product-specific remediation decision.`)
 }
 
 func printAssessUsage(writer io.Writer) {

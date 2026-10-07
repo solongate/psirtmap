@@ -9,6 +9,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/mattn/go-isatty v0.0.24
 	github.com/package-url/packageurl-go v0.1.7
+	github.com/secengcommons/cvss v1.2.0
 	modernc.org/sqlite v1.60.1
 )
 

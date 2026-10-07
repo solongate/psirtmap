@@ -10,8 +10,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -19,10 +21,11 @@ import (
 
 	"github.com/solongate/psirtmap/internal/kev"
 	"github.com/solongate/psirtmap/internal/osv"
+	"github.com/solongate/psirtmap/internal/vulnintel"
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 7
+const schemaVersion = 8
 
 const (
 	AssessmentNeedsReview   = "needs-review"
@@ -151,6 +154,16 @@ type FindingMatch struct {
 	VulnerabilityID  string
 	Aliases          []string
 	Summary          string
+	Severity         string
+	CVSSScore        *float64
+	CVSSVersion      string
+	CVSSVector       string
+	Published        string
+	Modified         string
+	Withdrawn        string
+	FixedVersions    []string
+	References       []osv.Reference
+	Source           string
 }
 
 // Finding is a durable potential-impact record for one shipped release.
@@ -164,6 +177,16 @@ type Finding struct {
 	VulnerabilityID   string             `json:"id"`
 	Aliases           []string           `json:"aliases"`
 	Summary           string             `json:"summary,omitempty"`
+	Severity          string             `json:"severity"`
+	CVSSScore         *float64           `json:"cvss_score,omitempty"`
+	CVSSVersion       string             `json:"cvss_version,omitempty"`
+	CVSSVector        string             `json:"cvss_vector,omitempty"`
+	Published         string             `json:"published,omitempty"`
+	Modified          string             `json:"modified,omitempty"`
+	Withdrawn         string             `json:"withdrawn,omitempty"`
+	FixedVersions     []string           `json:"fixed_versions"`
+	References        []osv.Reference    `json:"references"`
+	Source            string             `json:"source"`
 	Status            string             `json:"status"`
 	MatchStatus       string             `json:"match_status"`
 	Active            bool               `json:"active"`
@@ -177,10 +200,12 @@ type Finding struct {
 // FindingFilter limits a finding list to a release and optionally includes
 // records that no longer match the current local vulnerability snapshot.
 type FindingFilter struct {
-	Product         string
-	Release         string
-	Status          string
-	IncludeInactive bool
+	Product            string
+	Release            string
+	Status             string
+	Severity           string
+	KnownExploitedOnly bool
+	IncludeInactive    bool
 }
 
 // AssessmentTarget identifies one component-level finding. Component fields
@@ -620,10 +645,70 @@ func (d *DB) migrate(ctx context.Context) error {
 		}
 	}
 
+	if currentVersion < 8 {
+		columns := []struct {
+			table      string
+			name       string
+			definition string
+		}{
+			{table: "vulnerabilities", name: "references_json", definition: `TEXT NOT NULL DEFAULT '[]'`},
+			{table: "findings", name: "severity", definition: `TEXT NOT NULL DEFAULT 'unknown' CHECK(severity IN ('unknown', 'none', 'low', 'medium', 'high', 'critical'))`},
+			{table: "findings", name: "cvss_score", definition: `REAL`},
+			{table: "findings", name: "cvss_version", definition: `TEXT NOT NULL DEFAULT ''`},
+			{table: "findings", name: "cvss_vector", definition: `TEXT NOT NULL DEFAULT ''`},
+			{table: "findings", name: "published", definition: `TEXT NOT NULL DEFAULT ''`},
+			{table: "findings", name: "modified", definition: `TEXT NOT NULL DEFAULT ''`},
+			{table: "findings", name: "withdrawn", definition: `TEXT NOT NULL DEFAULT ''`},
+			{table: "findings", name: "fixed_versions_json", definition: `TEXT NOT NULL DEFAULT '[]'`},
+			{table: "findings", name: "references_json", definition: `TEXT NOT NULL DEFAULT '[]'`},
+			{table: "findings", name: "vulnerability_source", definition: `TEXT NOT NULL DEFAULT 'OSV'`},
+		}
+		for _, column := range columns {
+			exists, err := sqliteColumnExists(ctx, transaction, column.table, column.name)
+			if err != nil {
+				return fmt.Errorf("inspect schema migration: %w", err)
+			}
+			if exists {
+				continue
+			}
+			statement := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", column.table, column.name, column.definition)
+			if _, err := transaction.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("apply schema migration: %w", err)
+			}
+		}
+		if _, err := transaction.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS findings_severity_idx ON findings(active, severity)`); err != nil {
+			return fmt.Errorf("apply schema migration: %w", err)
+		}
+		if _, err := transaction.ExecContext(ctx, `PRAGMA user_version = 8`); err != nil {
+			return fmt.Errorf("apply schema migration: %w", err)
+		}
+	}
+
 	if err := transaction.Commit(); err != nil {
 		return fmt.Errorf("commit schema migration: %w", err)
 	}
 	return nil
+}
+
+func sqliteColumnExists(ctx context.Context, transaction *sql.Tx, table, column string) (bool, error) {
+	rows, err := transaction.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var position int
+		var name, dataType string
+		var notNull, primaryKey int
+		var defaultValue any
+		if err := rows.Scan(&position, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // Close closes the underlying database.
@@ -1224,10 +1309,14 @@ func (d *DB) SaveOSVSnapshot(ctx context.Context, snapshots []PackageSnapshot) (
 			if marshalErr != nil {
 				return VulnerabilitySync{}, fmt.Errorf("encode affected data for %s: %w", vulnerability.ID, marshalErr)
 			}
+			referencesJSON, marshalErr := json.Marshal(nonNilReferences(vulnerability.References))
+			if marshalErr != nil {
+				return VulnerabilitySync{}, fmt.Errorf("encode references for %s: %w", vulnerability.ID, marshalErr)
+			}
 			_, insertErr = transaction.ExecContext(ctx, `INSERT INTO vulnerabilities(
 				source, source_id, summary, details, published, modified, withdrawn,
-				aliases_json, severity_json, affected_json, updated_at
-			) VALUES ('OSV', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				aliases_json, severity_json, affected_json, references_json, updated_at
+			) VALUES ('OSV', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(source, source_id) DO UPDATE SET
 				summary = excluded.summary,
 				details = excluded.details,
@@ -1237,10 +1326,11 @@ func (d *DB) SaveOSVSnapshot(ctx context.Context, snapshots []PackageSnapshot) (
 				aliases_json = excluded.aliases_json,
 				severity_json = excluded.severity_json,
 				affected_json = excluded.affected_json,
+				references_json = excluded.references_json,
 				updated_at = excluded.updated_at`,
 				vulnerability.ID, vulnerability.Summary, vulnerability.Details,
 				vulnerability.Published, vulnerability.Modified, vulnerability.Withdrawn,
-				string(aliasesJSON), string(severityJSON), string(affectedJSON), formatTime(result.SynchronizedAt))
+				string(aliasesJSON), string(severityJSON), string(affectedJSON), string(referencesJSON), formatTime(result.SynchronizedAt))
 			if insertErr != nil {
 				return VulnerabilitySync{}, fmt.Errorf("store vulnerability %s: %w", vulnerability.ID, insertErr)
 			}
@@ -1300,7 +1390,7 @@ func (d *DB) LookupOSVSnapshot(ctx context.Context, pkg PackageVersion) ([]osv.V
 
 	rows, err := d.db.QueryContext(ctx, `SELECT
 		v.source_id, v.summary, v.details, v.published, v.modified, v.withdrawn,
-		v.aliases_json, v.severity_json, v.affected_json
+		v.aliases_json, v.severity_json, v.affected_json, v.references_json
 		FROM package_vulnerability_matches pvm
 		JOIN vulnerabilities v ON v.id = pvm.vulnerability_id
 		WHERE pvm.package_snapshot_id = ?
@@ -1312,11 +1402,11 @@ func (d *DB) LookupOSVSnapshot(ctx context.Context, pkg PackageVersion) ([]osv.V
 	vulnerabilities := make([]osv.Vulnerability, 0)
 	for rows.Next() {
 		var vulnerability osv.Vulnerability
-		var aliasesJSON, severityJSON, affectedJSON string
+		var aliasesJSON, severityJSON, affectedJSON, referencesJSON string
 		if err := rows.Scan(
 			&vulnerability.ID, &vulnerability.Summary, &vulnerability.Details,
 			&vulnerability.Published, &vulnerability.Modified, &vulnerability.Withdrawn,
-			&aliasesJSON, &severityJSON, &affectedJSON,
+			&aliasesJSON, &severityJSON, &affectedJSON, &referencesJSON,
 		); err != nil {
 			return nil, time.Time{}, fmt.Errorf("read local OSV vulnerability: %w", err)
 		}
@@ -1328,6 +1418,9 @@ func (d *DB) LookupOSVSnapshot(ctx context.Context, pkg PackageVersion) ([]osv.V
 		}
 		if err := json.Unmarshal([]byte(affectedJSON), &vulnerability.Affected); err != nil {
 			return nil, time.Time{}, fmt.Errorf("decode affected data for %s: %w", vulnerability.ID, err)
+		}
+		if err := json.Unmarshal([]byte(referencesJSON), &vulnerability.References); err != nil {
+			return nil, time.Time{}, fmt.Errorf("decode references for %s: %w", vulnerability.ID, err)
 		}
 		vulnerabilities = append(vulnerabilities, vulnerability)
 	}
@@ -1552,6 +1645,47 @@ func (d *DB) ReconcileFindings(
 			}
 		}
 		match.Aliases = aliases
+		match.Severity = strings.ToLower(strings.TrimSpace(match.Severity))
+		if match.Severity == "" {
+			match.Severity = vulnintel.SeverityUnknown
+		}
+		if !vulnintel.ValidSeverity(match.Severity) {
+			return FindingScanResult{}, fmt.Errorf("match %d: invalid severity %q", index+1, match.Severity)
+		}
+		if match.CVSSScore != nil && (*match.CVSSScore < 0 || *match.CVSSScore > 10) {
+			return FindingScanResult{}, fmt.Errorf("match %d: CVSS score must be between 0 and 10", index+1)
+		}
+		for _, target := range []struct {
+			label string
+			value *string
+		}{
+			{label: "CVSS version", value: &match.CVSSVersion},
+			{label: "CVSS vector", value: &match.CVSSVector},
+			{label: "published timestamp", value: &match.Published},
+			{label: "modified timestamp", value: &match.Modified},
+			{label: "withdrawn timestamp", value: &match.Withdrawn},
+		} {
+			*target.value, err = cleanImportText(target.label, *target.value)
+			if err != nil {
+				return FindingScanResult{}, fmt.Errorf("match %d: %w", index+1, err)
+			}
+		}
+		match.Source = strings.TrimSpace(match.Source)
+		if match.Source == "" {
+			match.Source = "OSV"
+		}
+		match.Source, err = cleanIdentifier("vulnerability source", match.Source)
+		if err != nil {
+			return FindingScanResult{}, fmt.Errorf("match %d: %w", index+1, err)
+		}
+		match.FixedVersions, err = cleanFindingVersions(match.FixedVersions)
+		if err != nil {
+			return FindingScanResult{}, fmt.Errorf("match %d: %w", index+1, err)
+		}
+		match.References, err = cleanFindingReferences(match.References)
+		if err != nil {
+			return FindingScanResult{}, fmt.Errorf("match %d: %w", index+1, err)
+		}
 		key := findingKey{match.Ecosystem, match.Component, match.ComponentVersion, match.VulnerabilityID}
 		cleaned[key] = match
 	}
@@ -1635,15 +1769,27 @@ func (d *DB) ReconcileFindings(
 		if marshalErr != nil {
 			return FindingScanResult{}, fmt.Errorf("encode finding aliases for %s: %w", match.VulnerabilityID, marshalErr)
 		}
+		fixedVersionsJSON, marshalErr := json.Marshal(nonNilStrings(match.FixedVersions))
+		if marshalErr != nil {
+			return FindingScanResult{}, fmt.Errorf("encode fixed versions for %s: %w", match.VulnerabilityID, marshalErr)
+		}
+		referencesJSON, marshalErr := json.Marshal(nonNilReferences(match.References))
+		if marshalErr != nil {
+			return FindingScanResult{}, fmt.Errorf("encode references for %s: %w", match.VulnerabilityID, marshalErr)
+		}
 		stored, exists := existing[key]
 		if !exists {
 			_, err = transaction.ExecContext(ctx, `INSERT INTO findings(
 				release_id, ecosystem, component_name, component_version, vulnerability_id,
-				aliases_json, summary, active, first_seen_at, last_seen_at,
+				aliases_json, summary, severity, cvss_score, cvss_version, cvss_vector,
+				published, modified, withdrawn, fixed_versions_json, references_json,
+				vulnerability_source, active, first_seen_at, last_seen_at,
 				no_longer_matched_at, last_scan_id
-			) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, '', ?)`,
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, '', ?)`,
 				releaseID, match.Ecosystem, match.Component, match.ComponentVersion,
-				match.VulnerabilityID, string(aliasesJSON), match.Summary,
+				match.VulnerabilityID, string(aliasesJSON), match.Summary, match.Severity,
+				match.CVSSScore, match.CVSSVersion, match.CVSSVector, match.Published,
+				match.Modified, match.Withdrawn, string(fixedVersionsJSON), string(referencesJSON), match.Source,
 				formatTime(scannedAt), formatTime(scannedAt), scanID,
 			)
 			if err != nil {
@@ -1654,9 +1800,15 @@ func (d *DB) ReconcileFindings(
 		}
 
 		_, err = transaction.ExecContext(ctx, `UPDATE findings SET
-			aliases_json = ?, summary = ?, active = 1, last_seen_at = ?,
+			aliases_json = ?, summary = ?, severity = ?, cvss_score = ?,
+			cvss_version = ?, cvss_vector = ?, published = ?, modified = ?,
+			withdrawn = ?, fixed_versions_json = ?, references_json = ?,
+			vulnerability_source = ?, active = 1, last_seen_at = ?,
 			no_longer_matched_at = '', last_scan_id = ? WHERE id = ?`,
-			string(aliasesJSON), match.Summary, formatTime(scannedAt), scanID, stored.id,
+			string(aliasesJSON), match.Summary, match.Severity, match.CVSSScore,
+			match.CVSSVersion, match.CVSSVector, match.Published, match.Modified,
+			match.Withdrawn, string(fixedVersionsJSON), string(referencesJSON), match.Source,
+			formatTime(scannedAt), scanID, stored.id,
 		)
 		if err != nil {
 			return FindingScanResult{}, fmt.Errorf("refresh finding %s: %w", match.VulnerabilityID, err)
@@ -1698,12 +1850,14 @@ func (d *DB) ReconcileFindings(
 	return result, nil
 }
 
-// ListFindings returns durable findings ordered by shipped release and
-// vulnerability identity. Inactive records are excluded by default.
+// ListFindings returns durable findings ordered by known exploitation,
+// severity, disclosure recency, and stable identity fields. Inactive records
+// are excluded by default.
 func (d *DB) ListFindings(ctx context.Context, filter FindingFilter) ([]Finding, error) {
 	filter.Product = strings.TrimSpace(filter.Product)
 	filter.Release = strings.TrimSpace(filter.Release)
 	filter.Status = strings.TrimSpace(filter.Status)
+	filter.Severity = strings.ToLower(strings.TrimSpace(filter.Severity))
 	if filter.Release != "" && filter.Product == "" {
 		return nil, errors.New("finding release filter requires a product")
 	}
@@ -1726,9 +1880,15 @@ func (d *DB) ListFindings(ctx context.Context, filter FindingFilter) ([]Finding,
 			return nil, err
 		}
 	}
+	if filter.Severity != "" && !vulnintel.ValidSeverity(filter.Severity) {
+		return nil, fmt.Errorf("invalid severity %q; expected one of: unknown, none, low, medium, high, critical", filter.Severity)
+	}
 
 	query := `SELECT f.id, p.name, r.version, f.ecosystem, f.component_name,
 		f.component_version, f.vulnerability_id, f.aliases_json, f.summary,
+		f.severity, f.cvss_score, f.cvss_version, f.cvss_vector, f.published,
+		f.modified, f.withdrawn, f.fixed_versions_json, f.references_json,
+		f.vulnerability_source,
 		f.review_status, f.active, f.first_seen_at, f.last_seen_at,
 		f.no_longer_matched_at
 		FROM findings f
@@ -1750,6 +1910,10 @@ func (d *DB) ListFindings(ctx context.Context, filter FindingFilter) ([]Finding,
 		query += " AND f.review_status = ?"
 		args = append(args, filter.Status)
 	}
+	if filter.Severity != "" {
+		query += " AND f.severity = ?"
+		args = append(args, filter.Severity)
+	}
 	query += ` ORDER BY p.name COLLATE NOCASE, r.version, f.vulnerability_id,
 		f.ecosystem, f.component_name, f.component_version`
 
@@ -1761,12 +1925,17 @@ func (d *DB) ListFindings(ctx context.Context, filter FindingFilter) ([]Finding,
 	findings := make([]Finding, 0)
 	for rows.Next() {
 		var finding Finding
-		var aliasesJSON, reviewStatus, firstSeenAt, lastSeenAt, noLongerMatchedAt string
+		var aliasesJSON, fixedVersionsJSON, referencesJSON string
+		var reviewStatus, firstSeenAt, lastSeenAt, noLongerMatchedAt string
+		var cvssScore sql.NullFloat64
 		var active int
 		if err := rows.Scan(
 			&finding.FindingID, &finding.Product, &finding.Release, &finding.Ecosystem, &finding.Component,
 			&finding.ComponentVersion, &finding.VulnerabilityID, &aliasesJSON,
-			&finding.Summary, &reviewStatus, &active, &firstSeenAt, &lastSeenAt,
+			&finding.Summary, &finding.Severity, &cvssScore, &finding.CVSSVersion,
+			&finding.CVSSVector, &finding.Published, &finding.Modified, &finding.Withdrawn,
+			&fixedVersionsJSON, &referencesJSON, &finding.Source,
+			&reviewStatus, &active, &firstSeenAt, &lastSeenAt,
 			&noLongerMatchedAt,
 		); err != nil {
 			return nil, fmt.Errorf("read finding: %w", err)
@@ -1775,6 +1944,18 @@ func (d *DB) ListFindings(ctx context.Context, filter FindingFilter) ([]Finding,
 			return nil, fmt.Errorf("decode finding aliases for %s: %w", finding.VulnerabilityID, err)
 		}
 		finding.Aliases = nonNilStrings(finding.Aliases)
+		if cvssScore.Valid {
+			score := cvssScore.Float64
+			finding.CVSSScore = &score
+		}
+		if err := json.Unmarshal([]byte(fixedVersionsJSON), &finding.FixedVersions); err != nil {
+			return nil, fmt.Errorf("decode fixed versions for %s: %w", finding.VulnerabilityID, err)
+		}
+		finding.FixedVersions = nonNilStrings(finding.FixedVersions)
+		if err := json.Unmarshal([]byte(referencesJSON), &finding.References); err != nil {
+			return nil, fmt.Errorf("decode references for %s: %w", finding.VulnerabilityID, err)
+		}
+		finding.References = nonNilReferences(finding.References)
 		finding.Active = active == 1
 		finding.Status = reviewStatus
 		finding.MatchStatus = "matched"
@@ -1809,7 +1990,51 @@ func (d *DB) ListFindings(ctx context.Context, filter FindingFilter) ([]Finding,
 		return nil, err
 	}
 	enrichFindingsWithKEV(findings, entries)
+	if filter.KnownExploitedOnly {
+		filtered := findings[:0]
+		for _, finding := range findings {
+			if finding.KnownExploited {
+				filtered = append(filtered, finding)
+			}
+		}
+		findings = filtered
+	}
+	sortFindingsByPriority(findings)
 	return findings, nil
+}
+
+func sortFindingsByPriority(findings []Finding) {
+	sort.SliceStable(findings, func(i, j int) bool {
+		left, right := findings[i], findings[j]
+		if left.KnownExploited != right.KnownExploited {
+			return left.KnownExploited
+		}
+		if leftRank, rightRank := vulnintel.SeverityRank(left.Severity), vulnintel.SeverityRank(right.Severity); leftRank != rightRank {
+			return leftRank > rightRank
+		}
+		if left.Modified != right.Modified {
+			return left.Modified > right.Modified
+		}
+		if left.Published != right.Published {
+			return left.Published > right.Published
+		}
+		if left.Product != right.Product {
+			return strings.ToLower(left.Product) < strings.ToLower(right.Product)
+		}
+		if left.Release != right.Release {
+			return left.Release < right.Release
+		}
+		if left.VulnerabilityID != right.VulnerabilityID {
+			return left.VulnerabilityID < right.VulnerabilityID
+		}
+		if left.Ecosystem != right.Ecosystem {
+			return left.Ecosystem < right.Ecosystem
+		}
+		if left.Component != right.Component {
+			return left.Component < right.Component
+		}
+		return left.ComponentVersion < right.ComponentVersion
+	})
 }
 
 func enrichFindingsWithKEV(findings []Finding, entries []kev.Vulnerability) {
@@ -2160,6 +2385,64 @@ func nonNilAffected(values []osv.Affected) []osv.Affected {
 		return []osv.Affected{}
 	}
 	return values
+}
+
+func nonNilReferences(values []osv.Reference) []osv.Reference {
+	if values == nil {
+		return []osv.Reference{}
+	}
+	return values
+}
+
+func cleanFindingVersions(values []string) ([]string, error) {
+	seen := make(map[string]struct{}, len(values))
+	cleaned := make([]string, 0, len(values))
+	for _, value := range values {
+		value, err := cleanIdentifier("fixed version", value)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		cleaned = append(cleaned, value)
+	}
+	sort.Strings(cleaned)
+	return cleaned, nil
+}
+
+func cleanFindingReferences(values []osv.Reference) ([]osv.Reference, error) {
+	seen := make(map[string]struct{}, len(values))
+	cleaned := make([]osv.Reference, 0, len(values))
+	for _, value := range values {
+		var err error
+		value.Type, err = cleanImportText("reference type", value.Type)
+		if err != nil {
+			return nil, err
+		}
+		value.URL, err = cleanImportText("reference URL", value.URL)
+		if err != nil {
+			return nil, err
+		}
+		parsed, parseErr := url.Parse(value.URL)
+		if parseErr != nil || parsed.Host == "" || (parsed.Scheme != "https" && parsed.Scheme != "http") {
+			return nil, fmt.Errorf("reference URL %q must be an absolute HTTP(S) URL", value.URL)
+		}
+		key := value.Type + "\x00" + value.URL
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		cleaned = append(cleaned, value)
+	}
+	sort.Slice(cleaned, func(i, j int) bool {
+		if cleaned[i].Type != cleaned[j].Type {
+			return cleaned[i].Type < cleaned[j].Type
+		}
+		return cleaned[i].URL < cleaned[j].URL
+	})
+	return cleaned, nil
 }
 
 func (d *DB) productID(ctx context.Context, name string) (int64, string, error) {

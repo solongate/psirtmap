@@ -14,6 +14,7 @@ import (
 	"github.com/solongate/psirtmap/internal/kev"
 	"github.com/solongate/psirtmap/internal/osv"
 	"github.com/solongate/psirtmap/internal/store"
+	"github.com/solongate/psirtmap/internal/vulnintel"
 )
 
 const scanWorkers = 4
@@ -22,6 +23,16 @@ type finding struct {
 	ID               string             `json:"id"`
 	Aliases          []string           `json:"aliases,omitempty"`
 	Summary          string             `json:"summary,omitempty"`
+	Severity         string             `json:"severity"`
+	CVSSScore        *float64           `json:"cvss_score,omitempty"`
+	CVSSVersion      string             `json:"cvss_version,omitempty"`
+	CVSSVector       string             `json:"cvss_vector,omitempty"`
+	Published        string             `json:"published,omitempty"`
+	Modified         string             `json:"modified,omitempty"`
+	Withdrawn        string             `json:"withdrawn,omitempty"`
+	FixedVersions    []string           `json:"fixed_versions"`
+	References       []osv.Reference    `json:"references"`
+	Source           string             `json:"source"`
 	Ecosystem        string             `json:"ecosystem"`
 	Component        string             `json:"component"`
 	ComponentVersion string             `json:"component_version"`
@@ -125,6 +136,7 @@ func runScan(
 	if err := enrichScanResultWithKEV(ctx, database, &result); err != nil {
 		return commandError(stderr, err)
 	}
+	sortScanFindingsByPriority(result.Findings)
 	if !options.live {
 		if err := persistScanResult(ctx, database, &result); err != nil {
 			return commandError(stderr, err)
@@ -143,7 +155,11 @@ func persistScanResult(ctx context.Context, database *store.DB, result *scanResu
 		matches = append(matches, store.FindingMatch{
 			Ecosystem: item.Ecosystem, Component: item.Component,
 			ComponentVersion: item.ComponentVersion, VulnerabilityID: item.ID,
-			Aliases: item.Aliases, Summary: item.Summary,
+			Aliases: item.Aliases, Summary: item.Summary, Severity: item.Severity,
+			CVSSScore: item.CVSSScore, CVSSVersion: item.CVSSVersion,
+			CVSSVector: item.CVSSVector, Published: item.Published,
+			Modified: item.Modified, Withdrawn: item.Withdrawn,
+			FixedVersions: item.FixedVersions, References: item.References, Source: item.Source,
 		})
 	}
 	var synchronizedAt time.Time
@@ -334,15 +350,7 @@ func scanComponentsLive(
 			continue
 		}
 		for _, vulnerability := range result.vulnerabilities {
-			findings = append(findings, finding{
-				ID:               vulnerability.ID,
-				Aliases:          vulnerability.Aliases,
-				Summary:          vulnerability.Summary,
-				Ecosystem:        result.component.Ecosystem,
-				Component:        result.component.Name,
-				ComponentVersion: result.component.Version,
-				Status:           "needs-review",
-			})
+			findings = append(findings, findingFromVulnerability(vulnerability, result.component))
 		}
 	}
 	if firstError != nil {
@@ -391,12 +399,7 @@ func scanComponentsLocal(
 			synchronizedAt = packageSyncedAt
 		}
 		for _, vulnerability := range vulnerabilities {
-			findings = append(findings, finding{
-				ID: vulnerability.ID, Aliases: vulnerability.Aliases,
-				Summary: vulnerability.Summary, Ecosystem: component.Ecosystem,
-				Component: component.Name, ComponentVersion: component.Version,
-				Status: "needs-review",
-			})
+			findings = append(findings, findingFromVulnerability(vulnerability, component))
 		}
 	}
 	sortFindings(findings)
@@ -415,6 +418,45 @@ func sortFindings(findings []finding) {
 			return findings[i].Component < findings[j].Component
 		}
 		return findings[i].ComponentVersion < findings[j].ComponentVersion
+	})
+}
+
+func findingFromVulnerability(vulnerability osv.Vulnerability, component store.Component) finding {
+	intelligence := vulnintel.Analyze(vulnerability, component.Ecosystem, component.Name)
+	return finding{
+		ID: vulnerability.ID, Aliases: vulnerability.Aliases, Summary: vulnerability.Summary,
+		Ecosystem: component.Ecosystem, Component: component.Name,
+		ComponentVersion: component.Version, Status: store.AssessmentNeedsReview,
+		Severity: intelligence.Severity, CVSSScore: intelligence.CVSSScore,
+		CVSSVersion: intelligence.CVSSVersion, CVSSVector: intelligence.CVSSVector,
+		Published: intelligence.Published, Modified: intelligence.Modified,
+		Withdrawn: intelligence.Withdrawn, FixedVersions: intelligence.FixedVersions,
+		References: intelligence.References, Source: "OSV",
+	}
+}
+
+func sortScanFindingsByPriority(findings []finding) {
+	sort.SliceStable(findings, func(i, j int) bool {
+		left, right := findings[i], findings[j]
+		if left.KnownExploited != right.KnownExploited {
+			return left.KnownExploited
+		}
+		if leftRank, rightRank := vulnintel.SeverityRank(left.Severity), vulnintel.SeverityRank(right.Severity); leftRank != rightRank {
+			return leftRank > rightRank
+		}
+		if left.Modified != right.Modified {
+			return left.Modified > right.Modified
+		}
+		if left.ID != right.ID {
+			return left.ID < right.ID
+		}
+		if left.Ecosystem != right.Ecosystem {
+			return left.Ecosystem < right.Ecosystem
+		}
+		if left.Component != right.Component {
+			return left.Component < right.Component
+		}
+		return left.ComponentVersion < right.ComponentVersion
 	})
 }
 
@@ -451,14 +493,15 @@ func printScanText(stdout io.Writer, stderr io.Writer, result scanResult) int {
 
 	fmt.Fprintln(stdout)
 	table := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(table, "ID\tECOSYSTEM\tCOMPONENT\tKEV\tSTATUS")
+	fmt.Fprintln(table, "ID\tSEVERITY\tECOSYSTEM\tCOMPONENT\tKEV\tSTATUS")
 	for _, item := range result.Findings {
 		kevStatus := "-"
 		if item.KnownExploited {
 			kevStatus = "YES"
 		}
-		fmt.Fprintf(table, "%s\t%s\t%s@%s\t%s\t%s\n",
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s@%s\t%s\t%s\n",
 			oneLine(item.ID),
+			strings.ToUpper(item.Severity),
 			item.Ecosystem,
 			item.Component,
 			item.ComponentVersion,

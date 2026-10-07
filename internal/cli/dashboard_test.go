@@ -530,8 +530,16 @@ func TestDashboardScansSelectedRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := database.SaveOSVSnapshot(ctx, []store.PackageSnapshot{{
-		Package:         store.PackageVersion{Ecosystem: "Alpine", Name: "openssl", Version: "3.0.8"},
-		Vulnerabilities: []osv.Vulnerability{{ID: "CVE-2026-12345", Summary: "test"}},
+		Package: store.PackageVersion{Ecosystem: "Alpine", Name: "openssl", Version: "3.0.8"},
+		Vulnerabilities: []osv.Vulnerability{{
+			ID: "CVE-2026-12345", Summary: "test", Published: "2026-09-01T00:00:00Z",
+			Modified: "2026-10-01T00:00:00Z",
+			Severity: []osv.Severity{{Type: "CVSS_V4", Score: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"}},
+			Affected: []osv.Affected{{
+				Package: osv.Package{Ecosystem: "Alpine", Name: "openssl"},
+				Ranges:  []osv.Range{{Events: []osv.RangeEvent{{Fixed: "3.0.9"}}}},
+			}},
+		}},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -556,7 +564,9 @@ func TestDashboardScansSelectedRelease(t *testing.T) {
 		t.Fatalf("dashboard findings = %+v", model.data.findings)
 	}
 	model.screen = screenFindings
-	if content := model.View().Content; !strings.Contains(content, "CVE-2026-12345") || !strings.Contains(content, "openssl@3.0.8") {
+	if content := model.View().Content; !strings.Contains(content, "CVE-2026-12345") ||
+		!strings.Contains(content, "openssl@3.0.8") || !strings.Contains(content, "CRITICAL") ||
+		!strings.Contains(content, "Fixed boundary: 3.0.9") {
 		t.Fatalf("findings view = %q", content)
 	}
 	model.screen = screenScanner
