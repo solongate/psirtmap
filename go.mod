@@ -6,7 +6,7 @@ require (
 	charm.land/bubbles/v2 v2.2.1
 	charm.land/bubbletea/v2 v2.0.10
 	charm.land/lipgloss/v2 v2.0.5
-	github.com/charmbracelet/x/ansi v0.11.7
+	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/mattn/go-isatty v0.0.24
 	github.com/package-url/packageurl-go v0.1.7
 	github.com/secengcommons/cvss v1.2.0
