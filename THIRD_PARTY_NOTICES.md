@@ -5,10 +5,13 @@ PSIRTMap depends on open-source software, including:
 - `modernc.org/sqlite`, a pure-Go SQLite driver;
 - `github.com/package-url/packageurl-go`, the Go implementation of the
   Package URL specification;
+- `github.com/secengcommons/cvss`, an Apache-2.0-licensed CVSS 2.0, 3.0, 3.1,
+  and 4.0 parser and score calculator;
 - Bubble Tea, Bubbles, and Lip Gloss from Charm for the terminal interface;
 - their transitive runtime dependencies.
 
-These components use their own licenses, primarily BSD-3-Clause and MIT.
+These components use their own licenses, primarily Apache-2.0, BSD-3-Clause,
+and MIT.
 SQLite itself is dedicated to the public domain. Exact dependency versions are
 recorded in [`go.mod`](go.mod) and [`go.sum`](go.sum).
 

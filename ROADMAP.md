@@ -24,6 +24,7 @@ ordered so every release remains small, testable, and useful on its own.
 | Offline feeds | Scan from validated, transferable feed bundles | Shipped in `v0.0.9` |
 | Guided local UX | Install, launch, onboard, and transfer feeds without memorizing commands | Shipped in `v0.0.9` |
 | Foundation hardening | Backups, compatibility fixtures, output contracts, fuzz seeds, and dependency vulnerability checks | Unreleased |
+| Finding intelligence | Normalize severity and expose fixed boundaries, references, detail, filters, and deterministic priority | Unreleased |
 | VEX | Export human assessments in a machine-readable format | Later |
 
 ## Unreleased: foundation hardening
@@ -36,6 +37,25 @@ The next data-model changes are gated by a dedicated safety layer:
 - Seed-corpus fuzz tests for CycloneDX and offline feed parsers.
 - Reachability-aware Go vulnerability analysis in CI.
 - Maintained architecture and threat-model documents.
+
+## Unreleased: finding intelligence
+
+The next release turns a bare match into a useful triage record without
+pretending to make the human impact decision:
+
+- Parse supported OSV CVSS vectors and retain both normalized severity and the
+  source vector; unparseable or missing data remains `unknown`.
+- Persist disclosure timestamps, advisory references, and package-specific
+  fixed-version boundaries with each durable finding.
+- Prioritize known exploitation first, then severity, source recency, and a
+  stable identity tie-breaker.
+- Filter finding lists by severity or CISA KEV membership.
+- Inspect one component-level finding in text or deterministic JSON.
+- Expose the same triage context in the terminal dashboard and offline feed
+  workflow.
+
+CVSS, KEV, and fixed boundaries remain prioritization evidence. They do not
+replace product-specific exploitability assessment.
 
 ## Shipped: CycloneDX import
 

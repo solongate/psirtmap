@@ -51,6 +51,7 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           sqlite_dir="$(go list -m -f '{{.Dir}}' modernc.org/sqlite)"
           packageurl_dir="$(go list -m -f '{{.Dir}}' github.com/package-url/packageurl-go)"
+          cvss_dir="$(go list -m -f '{{.Dir}}' github.com/secengcommons/cvss)"
           mkdir -p build dist
 
           build_archive() {
@@ -73,6 +74,7 @@ jobs:
             mkdir -p "build/$package/docs/assets"
             cp docs/assets/dashboard.svg docs/assets/psirtmap-hero.png docs/assets/solongate-psirtmap-logo.png "build/$package/docs/assets/"
             cp "$packageurl_dir/LICENSE" "build/$package/THIRD_PARTY-packageurl-go-LICENSE"
+            cp "$cvss_dir/LICENSE" "build/$package/THIRD_PARTY-cvss-LICENSE"
             cp "$sqlite_dir/LICENSE" "build/$package/THIRD_PARTY-modernc-sqlite-LICENSE"
             cp "$sqlite_dir/LICENSE-SQLITE" "build/$package/THIRD_PARTY-SQLITE-LICENSE"
             cp "$sqlite_dir/LICENSE-3RD-PARTY.md" "build/$package/THIRD_PARTY-LICENSES.md"

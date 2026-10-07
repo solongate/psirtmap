@@ -8,12 +8,25 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Normalized CVSS 2.0, 3.0, 3.1, and 4.0 severity for durable findings, with
+  explicit `unknown` handling when OSV does not provide a usable vector.
+- Fixed-version boundaries, disclosure timestamps, source references, and raw
+  CVSS context in finding records and the terminal dashboard.
+- `psirtmap findings --severity`, `psirtmap findings --kev`, and
+  `psirtmap findings show` for focused triage and detailed inspection.
+- Deterministic KEV-first, severity-second, recency-third finding ordering.
 - Consistent, `0600` SQLite snapshots before existing databases are migrated.
 - A fixed v0.0.9 database compatibility fixture and automation-facing JSON
   output contract tests.
 - Seed-corpus fuzz tests for CycloneDX JSON and offline feed bundle parsers.
 - Architecture and threat-model documentation for the current local-first
   system.
+
+### Changed
+
+- Database schema migrated to version 8 while preserving v0.0.9 inventory,
+  local intelligence, findings, and assessment history through a private
+  pre-migration backup.
 
 ### Security
 

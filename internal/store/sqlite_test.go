@@ -381,7 +381,7 @@ func TestSchemaVersionOneMigratesWithoutLosingComponents(t *testing.T) {
 		t.Fatalf("Open(v1) error = %v", err)
 	}
 	defer database.Close()
-	backups, err := filepath.Glob(path + ".pre-migration-v1-to-v7-*.backup")
+	backups, err := filepath.Glob(path + ".pre-migration-v1-to-v8-*.backup")
 	if err != nil {
 		t.Fatalf("find migration backup: %v", err)
 	}
@@ -492,7 +492,10 @@ func TestVersion009DatabaseFixtureRemainsReadable(t *testing.T) {
 		t.Fatalf("v0.0.9 OSV snapshot = %+v, %v", vulnerabilities, err)
 	}
 	findings, err := database.ListFindings(ctx, FindingFilter{})
-	if err != nil || len(findings) != 1 || findings[0].Status != AssessmentNotAffected || !findings[0].KnownExploited {
+	if err != nil || len(findings) != 1 || findings[0].Status != AssessmentNotAffected ||
+		!findings[0].KnownExploited || findings[0].Severity != "unknown" ||
+		findings[0].CVSSScore != nil || findings[0].FixedVersions == nil ||
+		findings[0].References == nil || findings[0].Source != "OSV" {
 		t.Fatalf("v0.0.9 findings = %+v, %v", findings, err)
 	}
 	history, err := database.ListAssessments(ctx, AssessmentFilter{})
@@ -503,9 +506,9 @@ func TestVersion009DatabaseFixtureRemainsReadable(t *testing.T) {
 	if err != nil || feedImport.SourceName != "fixture.bundle" || feedImport.KEVEntries != 1 {
 		t.Fatalf("v0.0.9 feed import = %+v, %v", feedImport, err)
 	}
-	backups, err := filepath.Glob(path + ".pre-migration-*.backup")
-	if err != nil || len(backups) != 0 {
-		t.Fatalf("v0.0.9 fixture unexpectedly migrated; backups = %v, error = %v", backups, err)
+	backups, err := filepath.Glob(path + ".pre-migration-v7-to-v8-*.backup")
+	if err != nil || len(backups) != 1 {
+		t.Fatalf("v0.0.9 fixture migration backups = %v, error = %v; want one", backups, err)
 	}
 }
 
@@ -543,7 +546,8 @@ func TestOSVSnapshotLifecycleIsLocalAndAtomic(t *testing.T) {
 		{Package: busybox, Vulnerabilities: []osv.Vulnerability{}},
 		{Package: openssl, Vulnerabilities: []osv.Vulnerability{{
 			ID: "CVE-2026-12345", Aliases: []string{"GHSA-test"}, Summary: "test advisory",
-			Severity: []osv.Severity{{Type: "CVSS_V3", Score: "9.8"}},
+			Severity:   []osv.Severity{{Type: "CVSS_V3", Score: "9.8"}},
+			References: []osv.Reference{{Type: "ADVISORY", URL: "https://example.test/advisory"}},
 			Affected: []osv.Affected{{
 				Package: osv.Package{Ecosystem: "Alpine", Name: "openssl"},
 				Ranges:  []osv.Range{{Type: "ECOSYSTEM", Events: []osv.RangeEvent{{Introduced: "0"}, {Fixed: "3.0.9"}}}},
@@ -561,7 +565,8 @@ func TestOSVSnapshotLifecycleIsLocalAndAtomic(t *testing.T) {
 	if err != nil || len(vulnerabilities) != 1 || vulnerabilities[0].ID != "CVE-2026-12345" {
 		t.Fatalf("LookupOSVSnapshot(openssl) = %+v, %v", vulnerabilities, err)
 	}
-	if syncedAt.IsZero() || len(vulnerabilities[0].Affected) != 1 || len(vulnerabilities[0].Aliases) != 1 {
+	if syncedAt.IsZero() || len(vulnerabilities[0].Affected) != 1 || len(vulnerabilities[0].Aliases) != 1 ||
+		len(vulnerabilities[0].References) != 1 || vulnerabilities[0].References[0].URL != "https://example.test/advisory" {
 		t.Fatalf("stored vulnerability = %+v, synced at %v", vulnerabilities[0], syncedAt)
 	}
 	vulnerabilities, _, err = database.LookupOSVSnapshot(ctx, busybox)

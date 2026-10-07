@@ -1322,7 +1322,7 @@ func (m *dashboardModel) renderComponents(width, height int) string {
 func (m *dashboardModel) renderFindings(width, height int) string {
 	lines := []string{
 		styleTitle.Render("Findings") + "  " + styleMuted.Render(fmt.Sprintf("%d active", len(m.data.findings))),
-		styleMuted.Render("Vulnerability        Component                    KEV  Assessment       Match"),
+		styleMuted.Render("Vulnerability        Severity  Component               KEV  Assessment       Match"),
 	}
 	if len(m.data.findings) == 0 {
 		return strings.Join(append(
@@ -1330,16 +1330,17 @@ func (m *dashboardModel) renderFindings(width, height int) string {
 			styleMuted.Render("Run a local release scan to create durable findings."),
 		), "\n")
 	}
-	rows := visibleRange(len(m.data.findings), m.selected[screenFindings], max(1, height-12))
+	rows := visibleRange(len(m.data.findings), m.selected[screenFindings], max(1, height-15))
 	for index := rows.start; index < rows.end; index++ {
 		item := m.data.findings[index]
 		kevStatus := "-"
 		if item.KnownExploited {
 			kevStatus = "YES"
 		}
-		row := fmt.Sprintf("%-20s %-28s %-4s %-16s %s",
+		row := fmt.Sprintf("%-20s %-9s %-23s %-4s %-16s %s",
 			fitText(item.VulnerabilityID, 20),
-			fitText(item.Component+"@"+item.ComponentVersion, 28),
+			strings.ToUpper(item.Severity),
+			fitText(item.Component+"@"+item.ComponentVersion, 23),
 			kevStatus, fitText(item.Status, 16), item.MatchStatus,
 		)
 		lines = append(lines, selectableRow(fitText(row, width), index == m.selected[screenFindings]))
@@ -1350,6 +1351,17 @@ func (m *dashboardModel) renderFindings(width, height int) string {
 			selected.VulnerabilityID, selected.Product, selected.Release,
 			selected.Ecosystem, selected.Component, selected.ComponentVersion),
 	)
+	severity := strings.ToUpper(selected.Severity)
+	if selected.CVSSScore != nil {
+		severity += fmt.Sprintf(" %.1f (CVSS %s)", *selected.CVSSScore, selected.CVSSVersion)
+	}
+	lines = append(lines, "  Severity: "+severity)
+	if len(selected.FixedVersions) > 0 {
+		lines = append(lines, fitText("  Fixed boundary: "+strings.Join(selected.FixedVersions, ", "), width))
+	}
+	if selected.Published != "" || selected.Modified != "" {
+		lines = append(lines, fitText("  Published: "+selected.Published+"  •  Modified: "+selected.Modified, width))
+	}
 	if selected.KnownExploited && selected.KEV != nil {
 		lines = append(lines,
 			styleWarn.Render("  🔥 CISA KEV: known exploitation"),

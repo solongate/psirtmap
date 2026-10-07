@@ -324,19 +324,24 @@ func replaceOSVSnapshot(ctx context.Context, transaction *sql.Tx, syncResult Vul
 			if err != nil {
 				return fmt.Errorf("encode imported affected data for %s: %w", vulnerability.ID, err)
 			}
+			referencesJSON, err := json.Marshal(nonNilReferences(vulnerability.References))
+			if err != nil {
+				return fmt.Errorf("encode imported references for %s: %w", vulnerability.ID, err)
+			}
 			_, err = transaction.ExecContext(ctx, `INSERT INTO vulnerabilities(
 				source, source_id, summary, details, published, modified, withdrawn,
-				aliases_json, severity_json, affected_json, updated_at
-			) VALUES ('OSV', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				aliases_json, severity_json, affected_json, references_json, updated_at
+			) VALUES ('OSV', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(source, source_id) DO UPDATE SET
 				summary = excluded.summary, details = excluded.details,
 				published = excluded.published, modified = excluded.modified,
 				withdrawn = excluded.withdrawn, aliases_json = excluded.aliases_json,
 				severity_json = excluded.severity_json, affected_json = excluded.affected_json,
+				references_json = excluded.references_json,
 				updated_at = excluded.updated_at`,
 				vulnerability.ID, vulnerability.Summary, vulnerability.Details,
 				vulnerability.Published, vulnerability.Modified, vulnerability.Withdrawn,
-				string(aliasesJSON), string(severityJSON), string(affectedJSON), formatTime(syncResult.SynchronizedAt))
+				string(aliasesJSON), string(severityJSON), string(affectedJSON), string(referencesJSON), formatTime(syncResult.SynchronizedAt))
 			if err != nil {
 				return fmt.Errorf("store imported vulnerability %s: %w", vulnerability.ID, err)
 			}
