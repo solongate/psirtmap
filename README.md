@@ -48,7 +48,7 @@ is useful evidence; it is not proof that a shipped product is exploitable.
 
 ## What works today
 
-The current release, `v0.0.9`, includes:
+The current release, `v0.0.10`, includes:
 
 - A responsive, keyboard-driven terminal dashboard.
 - A guided first-run flow that creates a product, release, and component
@@ -61,7 +61,14 @@ The current release, `v0.0.9`, includes:
   alias-aware finding enrichment.
 - Local release scanning with source and snapshot freshness metadata.
 - Durable findings with new, existing, reopened, and no-longer-matched states.
-- A release-filterable `findings` command and dashboard view.
+- Normalized CVSS 2.0, 3.0, 3.1, and 4.0 severity with explicit `UNKNOWN`
+  handling when source data is missing or invalid.
+- Fixed-version boundaries, disclosure timestamps, advisory references, and
+  original CVSS context on durable findings.
+- Deterministic finding priority: CISA KEV first, then severity, disclosure
+  recency, and stable identity.
+- Release, assessment-status, severity, and KEV filtering plus a detailed
+  `findings show` view.
 - Append-only human assessments with `investigating`, `affected`,
   `not-affected`, and `fixed` decisions.
 - Reviewer, reason, evidence, timestamp, and complete decision history.
@@ -72,12 +79,9 @@ The current release, `v0.0.9`, includes:
 - Human-readable and deterministic JSON output.
 - Single-binary builds for macOS, Linux, and Windows.
 - Checksum-verifying installers and a local readiness doctor.
+- Private pre-migration database backups, compatibility fixtures, parser fuzz
+  seeds, JSON output contracts, and reachability-aware dependency checks.
 - No account, database server, or PSIRTMap cloud service.
-
-The unreleased main branch also adds normalized CVSS severity, fixed-version
-boundaries, advisory references, KEV-first prioritization, severity/KEV
-filters, and a detailed finding view. Missing or invalid CVSS data is shown as
-`UNKNOWN`; PSIRTMap does not invent a score.
 
 See the [roadmap](ROADMAP.md) for the ordered path to VEX and later PSIRT
 workflow capabilities.
