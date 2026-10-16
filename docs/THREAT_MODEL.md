@@ -2,7 +2,8 @@
 
 This threat model covers the current local PSIRTMap CLI, SQLite database,
 CycloneDX import, internet synchronization, and transferable feed bundles. It
-is deliberately scoped to behavior the project ships today.
+is deliberately scoped to behavior implemented in the current repository
+state, including changes listed as **Unreleased** in the changelog.
 
 ## Assets to protect
 

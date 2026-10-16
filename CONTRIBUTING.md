@@ -47,11 +47,18 @@ by documentation when they alter user-visible behavior.
 
 ```sh
 gofmt -w .
+git diff --check
+sh -n scripts/install.sh
+go mod download
 go mod verify
+go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 go vet ./...
 go test -race -count=1 ./...
 go build -trimpath ./...
 ```
+
+CI also parses the PowerShell installer and verifies that release binaries
+compile for the supported macOS, Linux, and Windows targets.
 
 By participating in the repository, you agree to communicate respectfully and
 to avoid posting sensitive product, customer, or vulnerability information in

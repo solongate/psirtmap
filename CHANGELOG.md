@@ -21,6 +21,8 @@ The project follows [Semantic Versioning](https://semver.org/).
   earlier unsigned feed-import history.
 - Feed help, architecture, security policy, threat model, and air-gapped setup
   now document key custody and authenticated transfer.
+- Public documentation now distinguishes the latest tagged release from
+  authenticated-feed capabilities that are available only on `main`.
 
 ### Security
 

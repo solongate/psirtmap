@@ -17,7 +17,7 @@ firmware, and embedded-software manufacturers.
 
 [![Release](https://img.shields.io/github/v/release/solongate/psirtmap?style=flat-square&color=7c6cff)](https://github.com/solongate/psirtmap/releases/latest)
 [![CI](https://img.shields.io/github/actions/workflow/status/solongate/psirtmap/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/solongate/psirtmap/actions/workflows/ci.yml)
-[![Go](https://img.shields.io/badge/Go-1.27%2B-00ADD8?style=flat-square&logo=go&logoColor=white)](go.mod)
+[![Go](https://img.shields.io/badge/Go-1.27.2%2B-00ADD8?style=flat-square&logo=go&logoColor=white)](go.mod)
 [![License](https://img.shields.io/github/license/solongate/psirtmap?style=flat-square)](LICENSE)
 [![OpenSSF Baseline](https://www.bestpractices.dev/projects/15533/baseline)](https://www.bestpractices.dev/projects/15533)
 
@@ -49,9 +49,9 @@ is useful evidence; it is not proof that a shipped product is exploitable.
 
 ## What works today
 
-The current codebase includes the following capabilities. The latest tagged
-release is `v0.0.10`; features marked `Unreleased` in the changelog land in the
-next release.
+The latest tagged release is `v0.0.10`. The current codebase includes the
+following capabilities; items explicitly marked **Unreleased** are available
+on `main` and will land in the next tagged release.
 
 - A responsive, keyboard-driven terminal dashboard.
 - A guided first-run flow that creates a product, release, and component
@@ -76,11 +76,14 @@ next release.
   `not-affected`, and `fixed` decisions.
 - Reviewer, reason, evidence, timestamp, and complete decision history.
 - Versioned, checksummed offline feed export and atomic import.
-- Optional Ed25519 feed signing with explicit trusted-public-key verification.
-- Dashboard actions for online updates, signing-key generation, verified
+- Dashboard actions for online updates and offline feed import/export.
+- Persistent bundle provenance, source freshness, and import timestamps.
+- **Unreleased:** Optional Ed25519 feed signing with explicit
+  trusted-public-key verification.
+- **Unreleased:** Dashboard actions for signing-key generation, verified
   offline feed import, and signed feed export.
-- Persistent bundle provenance, signature status, signer identity, source
-  freshness, and import timestamps.
+- **Unreleased:** Persistent signature status and signer identity for imported
+  bundles.
 - An explicit `--live` scan mode for direct OSV checks.
 - Human-readable and deterministic JSON output.
 - Single-binary builds for macOS, Linux, and Windows.
@@ -216,13 +219,20 @@ Use JSON output in scripts:
 psirtmap product list --json
 psirtmap release import AG-200@2.2 ./firmware-2.2.cdx.json --json
 psirtmap sync --json
-psirtmap feed keygen --private-key ./feed-key.pem --public-key ./feed-key.pub.pem --json
-psirtmap feed export ./psirtmap-feed.bundle --signing-key ./feed-key.pem --json
-psirtmap feed import ./psirtmap-feed.bundle --trusted-key ./feed-key.pub.pem --json
+psirtmap feed export ./psirtmap-feed.bundle --json
+psirtmap feed import ./psirtmap-feed.bundle --json
 psirtmap scan AG-200@2.2 --json
 psirtmap findings --all --json
 psirtmap findings show AG-200@2.2 CVE-2026-12345 --json
 psirtmap assess history AG-200@2.2 CVE-2026-12345 --json
+```
+
+The **Unreleased** authenticated-feed commands on `main` also support JSON:
+
+```sh
+psirtmap feed keygen --private-key ./feed-key.pem --public-key ./feed-key.pub.pem --json
+psirtmap feed export ./psirtmap-feed.bundle --signing-key ./feed-key.pem --json
+psirtmap feed import ./psirtmap-feed.bundle --trusted-key ./feed-key.pub.pem --json
 ```
 
 Run `psirtmap help` or `psirtmap <command> --help` for complete usage.
@@ -277,6 +287,12 @@ version; it is not an automatic recommendation or proof that upgrading alone
 remediates a particular product.
 
 ## Air-gapped transfer
+
+> [!NOTE]
+> The authenticated flow below is implemented on `main` and will ship in the
+> next release. The latest tagged release, `v0.0.10`, supports the same
+> `feed pull`, `feed export`, and `feed import` workflow without key options.
+> Its checksums detect corruption but do not authenticate who created a bundle.
 
 Generate a signing key pair once on a controlled, connected staging machine.
 Keep the private key secret there. Provision the public key to isolated

@@ -2,7 +2,8 @@
 
 PSIRTMap is a local-first Go CLI for mapping vulnerability intelligence to
 shipped product releases. This document describes the architecture implemented
-by the current pre-1.0 release, not a future service design.
+in the current repository state, including changes listed as **Unreleased** in
+the changelog. It is not a future service design.
 
 ## System boundary
 
