@@ -63,9 +63,7 @@ is useful evidence; it is not proof that a shipped product is exploitable.
 
 ## What works today
 
-The latest tagged release is `v0.0.10`. The current codebase includes the
-following capabilities; items explicitly marked **Unreleased** are available
-on `main` and will land in the next tagged release.
+The current release, `v0.0.11`, includes:
 
 - A responsive, keyboard-driven terminal dashboard.
 - A guided first-run flow that creates a product, release, and component
@@ -92,12 +90,10 @@ on `main` and will land in the next tagged release.
 - Versioned, checksummed offline feed export and atomic import.
 - Dashboard actions for online updates and offline feed import/export.
 - Persistent bundle provenance, source freshness, and import timestamps.
-- **Unreleased:** Optional Ed25519 feed signing with explicit
-  trusted-public-key verification.
-- **Unreleased:** Dashboard actions for signing-key generation, verified
+- Optional Ed25519 feed signing with explicit trusted-public-key verification.
+- Dashboard actions for signing-key generation, verified
   offline feed import, and signed feed export.
-- **Unreleased:** Persistent signature status and signer identity for imported
-  bundles.
+- Persistent signature status and signer identity for imported bundles.
 - An explicit `--live` scan mode for direct OSV checks.
 - Human-readable and deterministic JSON output.
 - Single-binary builds for macOS, Linux, and Windows.
@@ -270,7 +266,7 @@ psirtmap findings show AG-200@2.2 CVE-2026-12345 --json
 psirtmap assess history AG-200@2.2 CVE-2026-12345 --json
 ```
 
-The **Unreleased** authenticated-feed commands on `main` also support JSON:
+Authenticated-feed commands also support JSON:
 
 ```sh
 psirtmap feed keygen --private-key ./feed-key.pem --public-key ./feed-key.pub.pem --json
@@ -330,12 +326,6 @@ version; it is not an automatic recommendation or proof that upgrading alone
 remediates a particular product.
 
 ## Air-gapped transfer
-
-> [!NOTE]
-> The authenticated flow below is implemented on `main` and will ship in the
-> next release. The latest tagged release, `v0.0.10`, supports the same
-> `feed pull`, `feed export`, and `feed import` workflow without key options.
-> Its checksums detect corruption but do not authenticate who created a bundle.
 
 Generate a signing key pair once on a controlled, connected staging machine.
 Keep the private key secret there. Provision the public key to isolated

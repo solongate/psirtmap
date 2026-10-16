@@ -25,7 +25,7 @@ ordered so every release remains small, testable, and useful on its own.
 | Guided local UX | Install, launch, onboard, and transfer feeds without memorizing commands | Shipped in `v0.0.9` |
 | Foundation hardening | Backups, compatibility fixtures, output contracts, fuzz seeds, and dependency vulnerability checks | Shipped in `v0.0.10` |
 | Finding intelligence | Normalize severity and expose fixed boundaries, references, detail, filters, and deterministic priority | Shipped in `v0.0.10` |
-| Signed offline feeds | Authenticate feed creators with Ed25519 and explicit trusted keys | Implemented in `Unreleased` |
+| Signed offline feeds | Authenticate feed creators with Ed25519 and explicit trusted keys | Shipped in `v0.0.11` |
 | VEX | Export human assessments in a machine-readable format | Later |
 
 ## Shipped: foundation hardening
@@ -170,7 +170,7 @@ The first bundle format provides:
 - Explicit checksum and size validation before activation.
 
 SHA-256 checksums detect transfer corruption but are not an authenticity
-mechanism. The unreleased signed-feed layer adds:
+mechanism. `v0.0.11` adds authenticated feed transfer with:
 
 - One-time Ed25519 key generation with private keys restricted to `0600` on
   Unix-like systems.

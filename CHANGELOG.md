@@ -6,6 +6,8 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.11] - 2026-10-17
+
 ### Added
 
 - Ed25519 key generation, signed format-v2 offline feed bundles, and explicit
@@ -14,6 +16,11 @@ The project follows [Semantic Versioning](https://semver.org/).
   every imported feed.
 - Rejection tests for unknown signers, altered signatures, unsigned bundles
   under a trusted-key policy, and overly broad private-key permissions.
+- Build-provenance attestations and a CycloneDX SBOM for every GitHub release.
+- DCO sign-off enforcement for pull-request commits.
+- Code of Conduct, governance policy, and explicit maintainer-access policy.
+- Uninstall modes in the macOS/Linux and Windows installation scripts, with
+  custom install directories removed without touching unrelated copies.
 
 ### Changed
 
@@ -21,8 +28,15 @@ The project follows [Semantic Versioning](https://semver.org/).
   earlier unsigned feed-import history.
 - Feed help, architecture, security policy, threat model, and air-gapped setup
   now document key custody and authenticated transfer.
-- Public documentation now distinguishes the latest tagged release from
-  authenticated-feed capabilities that are available only on `main`.
+- Public documentation now distinguishes corruption-detecting checksums from
+  creator authentication and documents the complete signed-transfer flow.
+- OSV and CISA KEV requests now identify the exact PSIRTMap release instead of
+  using a development-only user agent.
+- Terminal UI dependencies updated to current compatible Bubble Tea, Lip Gloss,
+  and ANSI releases.
+- Project security status is linked through OpenSSF Best Practices, Baseline,
+  and Scorecard badges.
+- Version advanced to `0.0.11`.
 
 ### Security
 
@@ -32,6 +46,10 @@ The project follows [Semantic Versioning](https://semver.org/).
   and insecure Unix permission modes are rejected when loading.
 - The minimum Go toolchain is now 1.27.2, which includes standard-library
   fixes reported by `govulncheck` against Go 1.27.1.
+- CI now runs CodeQL static analysis and GitHub dependency review in addition
+  to `govulncheck`, tests, vet, and cross-platform compilation.
+- Dependency and static-analysis remediation targets, secret handling, and
+  vulnerability-exception recording are documented.
 
 ## [0.0.10] - 2026-10-08
 
@@ -267,7 +285,8 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Human-readable and JSON output.
 - Automated tests, cross-platform release builds, and Apache-2.0 licensing.
 
-[Unreleased]: https://github.com/solongate/psirtmap/compare/v0.0.10...HEAD
+[Unreleased]: https://github.com/solongate/psirtmap/compare/v0.0.11...HEAD
+[0.0.11]: https://github.com/solongate/psirtmap/compare/v0.0.10...v0.0.11
 [0.0.10]: https://github.com/solongate/psirtmap/compare/v0.0.9...v0.0.10
 [0.0.9]: https://github.com/solongate/psirtmap/compare/v0.0.8...v0.0.9
 [0.0.8]: https://github.com/solongate/psirtmap/compare/v0.0.7...v0.0.8

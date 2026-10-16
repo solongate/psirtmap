@@ -36,6 +36,9 @@ jobs:
           sh -n scripts/install.sh
           pwsh -NoProfile -Command '$tokens = $null; $parseErrors = $null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "scripts/install.ps1"), [ref]$tokens, [ref]$parseErrors) | Out-Null; if ($parseErrors.Count) { $parseErrors | ForEach-Object { Write-Error $_ }; exit 1 }'
 
+      - name: Test installer behavior
+        run: sh .github/test-install.sh
+
       - name: Verify dependencies
         run: |
           go mod download

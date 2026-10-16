@@ -14,13 +14,16 @@ need_command() {
 }
 
 if [ "$action" = "uninstall" ]; then
-  brew_prefix=""
-  if command -v brew >/dev/null 2>&1; then
-    brew_prefix="$(brew --prefix)/bin"
+  if [ -n "$install_dir" ]; then
+    set -- "$install_dir"
+  else
+    set -- "$HOME/.local/bin" "/usr/local/bin"
+    if command -v brew >/dev/null 2>&1; then
+      set -- "$@" "$(brew --prefix)/bin"
+    fi
   fi
   removed=0
-  for dir in "$install_dir" "$HOME/.local/bin" "/usr/local/bin" "$brew_prefix"; do
-    [ -z "$dir" ] && continue
+  for dir do
     if [ -f "$dir/psirtmap" ]; then
       rm -f "$dir/psirtmap"
       printf 'Removed %s/psirtmap\n' "$dir"

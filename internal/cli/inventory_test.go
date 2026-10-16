@@ -1049,7 +1049,7 @@ func TestDoctorExplainsLocalReadiness(t *testing.T) {
 		"active_findings", "ready_to_scan", "next_action",
 	)
 	if !strings.Contains(stdout, `"ready_to_scan": false`) ||
-		!strings.Contains(stdout, `"version": "0.0.10"`) ||
+		!strings.Contains(stdout, `"version": "0.0.11"`) ||
 		!strings.Contains(stdout, `"next_action": "Import a CycloneDX product release with `) {
 		t.Fatalf("doctor JSON = %q", stdout)
 	}
@@ -1066,7 +1066,7 @@ func TestRootCommandsAndUsageErrors(t *testing.T) {
 		useStderr  bool
 	}{
 		{name: "root help", args: []string{"--help"}, wantCode: 0, wantOutput: "Inventory commands:"},
-		{name: "version", args: []string{"version"}, wantCode: 0, wantOutput: "0.0.10"},
+		{name: "version", args: []string{"version"}, wantCode: 0, wantOutput: "0.0.11"},
 		{name: "unknown", args: []string{"wat"}, wantCode: 2, wantOutput: "unknown command", useStderr: true},
 		{name: "missing database value", args: []string{"--database"}, wantCode: 2, wantOutput: "requires a value", useStderr: true},
 	}

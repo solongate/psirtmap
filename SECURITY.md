@@ -121,10 +121,6 @@ alert is open against code shipped in that release.
 
 ## Offline feed trust
 
-The authenticated-feed controls in this section are implemented on `main` and
-listed as **Unreleased** until the next tagged release. The latest release,
-`v0.0.10`, validates bundle checksums but does not authenticate the creator.
-
 PSIRTMap feed bundles use strict structure validation and SHA-256 checksums to
 detect truncation and accidental modification. These checksums are stored in
 the bundle itself and therefore do not authenticate the bundle's creator.

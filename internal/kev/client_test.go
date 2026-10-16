@@ -65,7 +65,7 @@ func TestFetchValidatesNormalizesAndSortsCatalog(t *testing.T) {
 		if request.Method != http.MethodGet || request.URL.String() != "https://kev.test/catalog.json" {
 			t.Fatalf("request = %s %s", request.Method, request.URL)
 		}
-		if request.Header.Get("Accept") != "application/json" || !strings.HasPrefix(request.Header.Get("User-Agent"), "psirtmap/") {
+		if request.Header.Get("Accept") != "application/json" || request.Header.Get("User-Agent") != "psirtmap/0.0.11" {
 			t.Fatalf("headers = %#v", request.Header)
 		}
 		return response(http.StatusOK, validCatalog), nil
