@@ -25,7 +25,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 8
+const schemaVersion = 9
 
 const (
 	AssessmentNeedsReview   = "needs-review"
@@ -680,6 +680,33 @@ func (d *DB) migrate(ctx context.Context) error {
 			return fmt.Errorf("apply schema migration: %w", err)
 		}
 		if _, err := transaction.ExecContext(ctx, `PRAGMA user_version = 8`); err != nil {
+			return fmt.Errorf("apply schema migration: %w", err)
+		}
+	}
+
+	if currentVersion < 9 {
+		columns := []struct {
+			name       string
+			definition string
+		}{
+			{name: "signed", definition: `INTEGER NOT NULL DEFAULT 0 CHECK(signed IN (0, 1))`},
+			{name: "signature_verified", definition: `INTEGER NOT NULL DEFAULT 0 CHECK(signature_verified IN (0, 1))`},
+			{name: "signer_key_id", definition: `TEXT NOT NULL DEFAULT ''`},
+		}
+		for _, column := range columns {
+			exists, err := sqliteColumnExists(ctx, transaction, "feed_imports", column.name)
+			if err != nil {
+				return fmt.Errorf("inspect schema migration: %w", err)
+			}
+			if exists {
+				continue
+			}
+			statement := fmt.Sprintf("ALTER TABLE feed_imports ADD COLUMN %s %s", column.name, column.definition)
+			if _, err := transaction.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("apply schema migration: %w", err)
+			}
+		}
+		if _, err := transaction.ExecContext(ctx, `PRAGMA user_version = 9`); err != nil {
 			return fmt.Errorf("apply schema migration: %w", err)
 		}
 	}

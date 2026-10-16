@@ -16,6 +16,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/solongate/psirtmap/internal/feed"
 	"github.com/solongate/psirtmap/internal/store"
 )
 
@@ -94,6 +95,7 @@ const (
 	formSBOMImport
 	formAssessment
 	formQuickImport
+	formFeedKeygen
 	formFeedExport
 	formFeedImport
 )
@@ -462,12 +464,27 @@ func (m *dashboardModel) feedAction() (tea.Model, tea.Cmd) {
 	case 0:
 		return m.startSync()
 	case 1:
-		return m, m.openFeedImportForm()
+		return m, m.openFeedKeygenForm()
 	case 2:
+		return m, m.openFeedImportForm()
+	case 3:
 		return m, m.openFeedExportForm()
 	default:
 		return m, nil
 	}
+}
+
+func (m *dashboardModel) openFeedKeygenForm() tea.Cmd {
+	m.form = dashboardForm{
+		kind:  formFeedKeygen,
+		title: "Generate feed signing key",
+		fields: []dashboardField{
+			newDashboardFieldWithValue("Private key output", "Keep this secret on the connected staging system", "./psirtmap-feed-signing-key.pem"),
+			newDashboardFieldWithValue("Public key output", "Provision this file to isolated systems through a trusted path", "./psirtmap-feed-signing-key.pub.pem"),
+		},
+	}
+	m.form.fields[0].input.Focus()
+	return nil
 }
 
 func (m *dashboardModel) openFeedImportForm() tea.Cmd {
@@ -476,6 +493,7 @@ func (m *dashboardModel) openFeedImportForm() tea.Cmd {
 		title: "Import offline vulnerability feed",
 		fields: []dashboardField{
 			newDashboardFileField("Bundle path", "Press Ctrl+O to browse for a trusted .bundle file", "./psirtmap-feed.bundle", []string{".bundle"}),
+			newDashboardFileField("Trusted public key (optional)", "Providing a key requires and verifies the bundle signature", "./psirtmap-feed-signing-key.pub.pem", []string{".pem"}),
 		},
 	}
 	m.form.fields[0].input.Focus()
@@ -493,6 +511,7 @@ func (m *dashboardModel) openFeedExportForm() tea.Cmd {
 				"A new .bundle file; existing files are never overwritten",
 				fmt.Sprintf("./psirtmap-feed-%s.bundle", createdAt.Format("20060102T150405Z")),
 			),
+			newDashboardFileField("Private signing key (optional)", "Signs the bundle; keep this secret on the connected system", "./psirtmap-feed-signing-key.pem", []string{".pem"}),
 		},
 	}
 	m.form.fields[0].input.Focus()
@@ -866,15 +885,50 @@ func (m *dashboardModel) saveForm() tea.Cmd {
 				err:     err,
 			}
 		case formFeedExport:
-			info, err := exportFeedBundle(m.ctx, m.database, values[0], time.Now().UTC().Truncate(time.Second))
+			var signingKey *feed.SigningKey
+			if keyPath := strings.TrimSpace(values[1]); keyPath != "" {
+				loaded, err := feed.LoadSigningKey(keyPath)
+				if err != nil {
+					return dashboardSavedMsg{err: err}
+				}
+				signingKey = &loaded
+			}
+			info, err := exportFeedBundleWithSigningKey(
+				m.ctx, m.database, values[0], time.Now().UTC().Truncate(time.Second), signingKey,
+			)
+			authenticity := "unsigned"
+			if info.Signed {
+				authenticity = "signed by " + info.SignerKeyID
+			}
 			return dashboardSavedMsg{
-				message: fmt.Sprintf("Exported offline feed to %s (%d packages)", info.Path, info.Packages),
+				message: fmt.Sprintf("Exported %s offline feed to %s (%d packages)", authenticity, info.Path, info.Packages),
+				err:     err,
+			}
+		case formFeedKeygen:
+			keyID, err := feed.GenerateKeyPair(values[0], values[1])
+			return dashboardSavedMsg{
+				message: fmt.Sprintf("Created Ed25519 signing key %s; keep the private key secret", keyID),
 				err:     err,
 			}
 		case formFeedImport:
-			_, result, err := importFeedBundle(m.ctx, m.database, values[0])
+			policy := feed.VerificationPolicy{}
+			if keyPath := strings.TrimSpace(values[1]); keyPath != "" {
+				trusted, err := feed.LoadTrustedKey(keyPath)
+				if err != nil {
+					return dashboardSavedMsg{err: err}
+				}
+				policy.TrustedKeys = []feed.TrustedKey{trusted}
+				policy.RequireSignature = true
+			}
+			info, result, err := importFeedBundleWithPolicy(m.ctx, m.database, values[0], policy)
+			authenticity := "unsigned"
+			if info.SignatureVerified {
+				authenticity = "signature verified"
+			} else if info.Signed {
+				authenticity = "signed but not verified"
+			}
 			return dashboardSavedMsg{
-				message: fmt.Sprintf("Imported offline feed: %d packages, %d vulnerabilities", result.Packages, result.Vulnerabilities),
+				message: fmt.Sprintf("Imported offline feed (%s): %d packages, %d vulnerabilities", authenticity, result.Packages, result.Vulnerabilities),
 				err:     err,
 			}
 		default:
@@ -1020,7 +1074,7 @@ func (m *dashboardModel) currentListLength() int {
 	case screenFindings:
 		return len(m.data.findings)
 	case screenFeeds:
-		return 3
+		return 4
 	default:
 		return 0
 	}
@@ -1214,8 +1268,16 @@ func (m *dashboardModel) renderOverview(width, height int) string {
 	if m.data.feedImport == nil {
 		lines = append(lines, statusLine("●", "Offline feed transfer", "READY", true))
 	} else {
+		status := "UNSIGNED"
+		trusted := false
+		if m.data.feedImport.SignatureVerified {
+			status = "SIGNATURE VERIFIED"
+			trusted = true
+		} else if m.data.feedImport.Signed {
+			status = "SIGNED / UNVERIFIED"
+		}
 		lines = append(lines, statusLine(
-			"●", "Offline feed imported", m.data.feedImport.ImportedAt.Format("2006-01-02 15:04Z"), true,
+			"●", "Offline feed imported", status, trusted,
 		))
 	}
 	if height >= 15 {
@@ -1476,8 +1538,9 @@ func (m *dashboardModel) renderFeeds(width, height int) string {
 		description string
 	}{
 		{"Update from internet", "Download inventory-scoped OSV matches and the CISA KEV catalog"},
-		{"Import trusted bundle", "Validate and activate a .bundle in a disconnected environment"},
-		{"Export current bundle", "Create a checksummed .bundle for controlled transfer"},
+		{"Generate signing key", "Create a new Ed25519 key pair without replacing existing files"},
+		{"Import trusted bundle", "Verify a signed .bundle with a trusted public key, then activate it"},
+		{"Export current bundle", "Create an optionally signed .bundle for controlled transfer"},
 	}
 	for index, action := range actions {
 		row := fmt.Sprintf("%-24s  %s", action.title, action.description)
@@ -1497,13 +1560,20 @@ func (m *dashboardModel) renderFeeds(width, height int) string {
 			m.data.kevSync.SynchronizedAt.Format("2006-01-02 15:04Z"), m.data.kevSync.Entries))
 	}
 	if m.data.feedImport != nil && len(lines) < height-3 {
+		authenticity := "unsigned; checksums only"
+		if m.data.feedImport.SignatureVerified {
+			authenticity = "signature verified • " + m.data.feedImport.SignerKeyID
+		} else if m.data.feedImport.Signed {
+			authenticity = "signed but not verified • " + m.data.feedImport.SignerKeyID
+		}
 		lines = append(lines, "", styleTitle.Render("Last bundle import"),
 			fitText("  "+m.data.feedImport.SourceName+"  •  imported "+m.data.feedImport.ImportedAt.Format("2006-01-02 15:04Z"), width),
+			fitText("  Authenticity: "+authenticity, width),
 			fitText("  SHA-256: "+m.data.feedImport.ManifestSHA256, width),
 		)
 	}
 	if len(lines) < height-2 {
-		lines = append(lines, "", styleWarn.Render("Checksums detect corruption, not who created a bundle. Use a trusted transfer path."))
+		lines = append(lines, "", styleWarn.Render("Use a trusted public key to reject unsigned or impersonated bundles."))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -1559,6 +1629,8 @@ func (m *dashboardModel) renderForm(width int) string {
 			message = " Validating and importing offline feed..."
 		} else if m.form.kind == formFeedExport {
 			message = " Creating offline feed bundle..."
+		} else if m.form.kind == formFeedKeygen {
+			message = " Generating feed signing key..."
 		}
 		lines = append(lines, m.spinner.View()+message)
 	} else if m.form.err != nil {

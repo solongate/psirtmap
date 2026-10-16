@@ -61,8 +61,15 @@ func runDoctor(
 	if snapshot.FeedImport == nil {
 		fmt.Fprintln(stdout, "Offline feed      No bundle imported (feature is available)")
 	} else {
-		fmt.Fprintf(stdout, "Offline feed      Imported %s from %s\n",
-			snapshot.FeedImport.ImportedAt.Format("2006-01-02 15:04Z"), snapshot.FeedImport.SourceName)
+		authenticity := "unsigned"
+		if snapshot.FeedImport.SignatureVerified {
+			authenticity = "signature verified"
+		} else if snapshot.FeedImport.Signed {
+			authenticity = "signed, not verified"
+		}
+		fmt.Fprintf(stdout, "Offline feed      Imported %s from %s (%s)\n",
+			snapshot.FeedImport.ImportedAt.Format("2006-01-02 15:04Z"),
+			snapshot.FeedImport.SourceName, authenticity)
 	}
 	if snapshot.ReadyToScan {
 		fmt.Fprintln(stdout, "Scan readiness    READY")

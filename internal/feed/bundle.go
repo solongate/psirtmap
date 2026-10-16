@@ -22,19 +22,22 @@ import (
 )
 
 const (
-	Format        = "psirtmap-offline-feed"
-	FormatVersion = 1
+	Format              = "psirtmap-offline-feed"
+	FormatVersion       = 1
+	SignedFormatVersion = 2
 
-	manifestName = "manifest.json"
-	osvName      = "osv.json"
-	kevName      = "cisa-kev.json"
+	manifestName  = "manifest.json"
+	osvName       = "osv.json"
+	kevName       = "cisa-kev.json"
+	signatureName = "signature.json"
 
-	maxBundleSize   = 256 << 20
-	maxManifestSize = 1 << 20
-	maxOSVSize      = 192 << 20
-	maxKEVSize      = 48 << 20
-	maxPackages     = 1_000_000
-	maxKEVEntries   = 100_000
+	maxBundleSize    = 256 << 20
+	maxManifestSize  = 1 << 20
+	maxOSVSize       = 192 << 20
+	maxKEVSize       = 48 << 20
+	maxSignatureSize = 16 << 10
+	maxPackages      = 1_000_000
+	maxKEVEntries    = 100_000
 )
 
 // Snapshot contains the intelligence copied into a portable bundle.
@@ -61,14 +64,17 @@ type KEVSnapshot struct {
 
 // Info describes a validated bundle without exposing its complete payload.
 type Info struct {
-	Path            string    `json:"path"`
-	Format          string    `json:"format"`
-	FormatVersion   int       `json:"format_version"`
-	CreatedAt       time.Time `json:"created_at"`
-	ManifestSHA256  string    `json:"manifest_sha256"`
-	Packages        int       `json:"packages"`
-	Vulnerabilities int       `json:"vulnerabilities"`
-	KEVEntries      int       `json:"kev_entries"`
+	Path              string    `json:"path"`
+	Format            string    `json:"format"`
+	FormatVersion     int       `json:"format_version"`
+	CreatedAt         time.Time `json:"created_at"`
+	ManifestSHA256    string    `json:"manifest_sha256"`
+	Packages          int       `json:"packages"`
+	Vulnerabilities   int       `json:"vulnerabilities"`
+	KEVEntries        int       `json:"kev_entries"`
+	Signed            bool      `json:"signed"`
+	SignatureVerified bool      `json:"signature_verified"`
+	SignerKeyID       string    `json:"signer_key_id,omitempty"`
 }
 
 type manifest struct {
@@ -94,6 +100,17 @@ type manifestFile struct {
 
 // Write creates a new bundle atomically. Existing files are never replaced.
 func Write(path, generator string, snapshot Snapshot, createdAt time.Time) (Info, error) {
+	return WriteWithOptions(path, generator, snapshot, createdAt, WriteOptions{})
+}
+
+// WriteOptions configures optional feed-bundle signing.
+type WriteOptions struct {
+	SigningKey *SigningKey
+}
+
+// WriteWithOptions creates a bundle and optionally authenticates its manifest
+// with an Ed25519 signing key.
+func WriteWithOptions(path, generator string, snapshot Snapshot, createdAt time.Time, options WriteOptions) (Info, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return Info{}, errors.New("feed bundle path is required")
@@ -119,8 +136,12 @@ func Write(path, generator string, snapshot Snapshot, createdAt time.Time) (Info
 	}
 
 	contents := countContents(snapshot)
+	formatVersion := FormatVersion
+	if options.SigningKey != nil {
+		formatVersion = SignedFormatVersion
+	}
 	manifestValue := manifest{
-		Format: Format, FormatVersion: FormatVersion, CreatedAt: createdAt,
+		Format: Format, FormatVersion: formatVersion, CreatedAt: createdAt,
 		Generator: strings.TrimSpace(generator), Contents: contents,
 		Files: []manifestFile{
 			{Name: osvName, Size: int64(len(osvBytes)), SHA256: digest(osvBytes)},
@@ -130,6 +151,17 @@ func Write(path, generator string, snapshot Snapshot, createdAt time.Time) (Info
 	manifestBytes, err := marshalDocument(manifestValue)
 	if err != nil {
 		return Info{}, fmt.Errorf("encode feed manifest: %w", err)
+	}
+	var signatureBytes []byte
+	if options.SigningKey != nil {
+		signatureValue, err := createSignature(manifestBytes, *options.SigningKey)
+		if err != nil {
+			return Info{}, err
+		}
+		signatureBytes, err = marshalDocument(signatureValue)
+		if err != nil {
+			return Info{}, fmt.Errorf("encode feed signature: %w", err)
+		}
 	}
 
 	parent := filepath.Dir(path)
@@ -150,10 +182,17 @@ func Write(path, generator string, snapshot Snapshot, createdAt time.Time) (Info
 	}
 
 	zipWriter := zip.NewWriter(temporary)
-	for _, file := range []struct {
+	archiveFiles := []struct {
 		name string
 		data []byte
-	}{{manifestName, manifestBytes}, {osvName, osvBytes}, {kevName, kevBytes}} {
+	}{{manifestName, manifestBytes}, {osvName, osvBytes}, {kevName, kevBytes}}
+	if options.SigningKey != nil {
+		archiveFiles = append(archiveFiles, struct {
+			name string
+			data []byte
+		}{signatureName, signatureBytes})
+	}
+	for _, file := range archiveFiles {
 		header := &zip.FileHeader{Name: file.name, Method: zip.Deflate}
 		header.SetModTime(createdAt)
 		header.SetMode(0o600)
@@ -183,11 +222,22 @@ func Write(path, generator string, snapshot Snapshot, createdAt time.Time) (Info
 	if err := publishNoReplace(temporaryPath, path); err != nil {
 		return Info{}, err
 	}
-	return newInfo(path, manifestValue, manifestBytes), nil
+	info := newInfo(path, manifestValue, manifestBytes)
+	if options.SigningKey != nil {
+		info.Signed = true
+		info.SignerKeyID = options.SigningKey.KeyID()
+	}
+	return info, nil
 }
 
 // Read validates a bundle's structure, checksums, counts, and source payloads.
 func Read(path string) (Snapshot, Info, error) {
+	return ReadWithPolicy(path, VerificationPolicy{})
+}
+
+// ReadWithPolicy validates a bundle and enforces an optional signature trust
+// policy before returning any source data.
+func ReadWithPolicy(path string, policy VerificationPolicy) (Snapshot, Info, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return Snapshot{}, Info{}, errors.New("feed bundle path is required")
@@ -208,10 +258,16 @@ func Read(path string) (Snapshot, Info, error) {
 		return Snapshot{}, Info{}, fmt.Errorf("open feed bundle ZIP: %w", err)
 	}
 	defer reader.Close()
-	if len(reader.File) != 3 {
-		return Snapshot{}, Info{}, fmt.Errorf("feed bundle contains %d files; want exactly 3", len(reader.File))
+	if policy.RequireSignature && len(policy.TrustedKeys) == 0 {
+		return Snapshot{}, Info{}, errors.New("signature verification requires at least one trusted key")
 	}
-	limits := map[string]int64{manifestName: maxManifestSize, osvName: maxOSVSize, kevName: maxKEVSize}
+	if len(reader.File) != 3 && len(reader.File) != 4 {
+		return Snapshot{}, Info{}, fmt.Errorf("feed bundle contains %d files; want 3 or 4", len(reader.File))
+	}
+	limits := map[string]int64{
+		manifestName: maxManifestSize, osvName: maxOSVSize,
+		kevName: maxKEVSize, signatureName: maxSignatureSize,
+	}
 	files := make(map[string][]byte, len(limits))
 	for _, file := range reader.File {
 		limit, expected := limits[file.Name]
@@ -238,6 +294,22 @@ func Read(path string) (Snapshot, Info, error) {
 	if err := validateManifest(manifestValue, files); err != nil {
 		return Snapshot{}, Info{}, err
 	}
+	info := newInfo(path, manifestValue, files[manifestName])
+	if manifestValue.FormatVersion == SignedFormatVersion {
+		var signatureValue signatureDocument
+		if err := decodeStrict(files[signatureName], &signatureValue); err != nil {
+			return Snapshot{}, Info{}, fmt.Errorf("decode feed signature: %w", err)
+		}
+		verified, err := verifySignature(signatureValue, files[manifestName], policy)
+		if err != nil {
+			return Snapshot{}, Info{}, err
+		}
+		info.Signed = true
+		info.SignatureVerified = verified
+		info.SignerKeyID = signatureValue.KeyID
+	} else if policy.RequireSignature {
+		return Snapshot{}, Info{}, errors.New("feed bundle is unsigned but a trusted signature is required")
+	}
 	var snapshot Snapshot
 	if err := decodeStrict(files[osvName], &snapshot.OSV); err != nil {
 		return Snapshot{}, Info{}, fmt.Errorf("decode OSV feed data: %w", err)
@@ -251,7 +323,7 @@ func Read(path string) (Snapshot, Info, error) {
 	if actual := countContents(snapshot); actual != manifestValue.Contents {
 		return Snapshot{}, Info{}, fmt.Errorf("feed content counts do not match manifest: got %+v, want %+v", actual, manifestValue.Contents)
 	}
-	return snapshot, newInfo(path, manifestValue, files[manifestName]), nil
+	return snapshot, info, nil
 }
 
 func validateSnapshot(snapshot Snapshot, createdAt time.Time) error {
@@ -323,8 +395,15 @@ func validateManifest(value manifest, files map[string][]byte) error {
 	if value.Format != Format {
 		return fmt.Errorf("unsupported feed format %q", value.Format)
 	}
-	if value.FormatVersion != FormatVersion {
+	if value.FormatVersion != FormatVersion && value.FormatVersion != SignedFormatVersion {
 		return fmt.Errorf("unsupported feed format version %d", value.FormatVersion)
+	}
+	_, hasSignature := files[signatureName]
+	if value.FormatVersion == FormatVersion && hasSignature {
+		return errors.New("legacy feed bundle must not contain a signature")
+	}
+	if value.FormatVersion == SignedFormatVersion && !hasSignature {
+		return errors.New("signed feed bundle is missing its signature")
 	}
 	if value.CreatedAt.IsZero() {
 		return errors.New("feed manifest creation time is required")

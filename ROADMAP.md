@@ -25,6 +25,7 @@ ordered so every release remains small, testable, and useful on its own.
 | Guided local UX | Install, launch, onboard, and transfer feeds without memorizing commands | Shipped in `v0.0.9` |
 | Foundation hardening | Backups, compatibility fixtures, output contracts, fuzz seeds, and dependency vulnerability checks | Shipped in `v0.0.10` |
 | Finding intelligence | Normalize severity and expose fixed boundaries, references, detail, filters, and deterministic priority | Shipped in `v0.0.10` |
+| Signed offline feeds | Authenticate feed creators with Ed25519 and explicit trusted keys | Implemented in `Unreleased` |
 | VEX | Export human assessments in a machine-readable format | Later |
 
 ## Shipped: foundation hardening
@@ -169,7 +170,16 @@ The first bundle format provides:
 - Explicit checksum and size validation before activation.
 
 SHA-256 checksums detect transfer corruption but are not an authenticity
-mechanism. Bundle signing and a configurable trust policy remain later work.
+mechanism. The unreleased signed-feed layer adds:
+
+- One-time Ed25519 key generation with private keys restricted to `0600` on
+  Unix-like systems.
+- Optional manifest signatures on exported bundles.
+- Explicit trusted-public-key policy on import; providing a trusted key makes
+  a valid signature mandatory.
+- Guided key generation and signed import/export fields in the dashboard.
+- Persistent signer fingerprints and verification status for audit.
+- Backward-compatible unsigned imports only when no trusted key is supplied.
 
 ## Shipped: guided installation and first run
 
@@ -187,7 +197,6 @@ syntax:
 
 ## Later
 
-- Signed feed bundles and configurable trusted signing keys.
 - Homebrew, WinGet, and other native package-manager distribution.
 - Full-ecosystem OSV data with independent local range evaluation.
 - CycloneDX VEX export from human assessments.

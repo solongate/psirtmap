@@ -363,13 +363,25 @@ func TestDashboardExportsAndImportsOfflineFeed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	bundlePath := filepath.Join(t.TempDir(), "transfer.bundle")
+	directory := t.TempDir()
+	bundlePath := filepath.Join(directory, "transfer.bundle")
+	privateKeyPath := filepath.Join(directory, "feed-signing-key.pem")
+	publicKeyPath := filepath.Join(directory, "feed-signing-key.pub.pem")
 	sourceModel := newDashboardModel(ctx, source, &dashboardQuerier{}, nil)
 	loadDashboard(t, sourceModel)
+	sourceModel.openFeedKeygenForm()
+	sourceModel.form.fields[0].input.SetValue(privateKeyPath)
+	sourceModel.form.fields[1].input.SetValue(publicKeyPath)
+	generated := sourceModel.saveForm()().(dashboardSavedMsg)
+	if generated.err != nil || !strings.Contains(generated.message, "Created Ed25519 signing key sha256:") {
+		t.Fatalf("dashboard feed keygen = %+v", generated)
+	}
 	sourceModel.openFeedExportForm()
 	sourceModel.form.fields[0].input.SetValue(bundlePath)
+	sourceModel.form.fields[1].input.SetValue(privateKeyPath)
 	exported := sourceModel.saveForm()().(dashboardSavedMsg)
-	if exported.err != nil || !strings.Contains(exported.message, "1 packages") {
+	if exported.err != nil || !strings.Contains(exported.message, "1 packages") ||
+		!strings.Contains(exported.message, "signed by sha256:") {
 		t.Fatalf("dashboard feed export = %+v", exported)
 	}
 
@@ -378,8 +390,10 @@ func TestDashboardExportsAndImportsOfflineFeed(t *testing.T) {
 	loadDashboard(t, targetModel)
 	targetModel.openFeedImportForm()
 	targetModel.form.fields[0].input.SetValue(bundlePath)
+	targetModel.form.fields[1].input.SetValue(publicKeyPath)
 	imported := targetModel.saveForm()().(dashboardSavedMsg)
-	if imported.err != nil || !strings.Contains(imported.message, "1 vulnerabilities") {
+	if imported.err != nil || !strings.Contains(imported.message, "1 vulnerabilities") ||
+		!strings.Contains(imported.message, "signature verified") {
 		t.Fatalf("dashboard feed import = %+v", imported)
 	}
 	_, refresh := targetModel.Update(imported)
@@ -392,7 +406,7 @@ func TestDashboardExportsAndImportsOfflineFeed(t *testing.T) {
 			targetModel.data.sync, targetModel.data.kevSync, targetModel.data.feedImport)
 	}
 	targetModel.screen = screenFeeds
-	for _, expected := range []string{"Last bundle import", "transfer.bundle", "SHA-256"} {
+	for _, expected := range []string{"Last bundle import", "transfer.bundle", "SHA-256", "signature verified", "sha256:"} {
 		if content := targetModel.View().Content; !strings.Contains(content, expected) {
 			t.Errorf("feeds view = %q, want %q", content, expected)
 		}
@@ -465,7 +479,7 @@ func TestDashboardRendersEverySectionWithInventory(t *testing.T) {
 		{screenComponents, []string{"Components", "openssl@3.0.8", "Alpine"}},
 		{screenFindings, []string{"Findings", "No active findings yet"}},
 		{screenScanner, []string{"Release scanner", "AG-200@2.2", "Press u to update"}},
-		{screenFeeds, []string{"Vulnerability feeds", "Update from internet", "Import trusted bundle", "Export current bundle"}},
+		{screenFeeds, []string{"Vulnerability feeds", "Update from internet", "Generate signing key", "Import trusted bundle", "Export current bundle"}},
 	}
 	for _, check := range checks {
 		model.screen = check.screen

@@ -57,10 +57,17 @@ PSIRTMap feed bundles use strict structure validation and SHA-256 checksums to
 detect truncation and accidental modification. These checksums are stored in
 the bundle itself and therefore do not authenticate the bundle's creator.
 
-Until signed bundles and trusted-key policy are available, import feed bundles
-only through an approved transfer process from a staging machine you control.
-Treat an unexpected checksum failure, manifest error, or source timestamp as a
-reason to reject the bundle and investigate the transfer path.
+For creator authentication, generate an Ed25519 key pair on a controlled
+staging machine, keep the private key secret, and provision the public key to
+isolated systems through an independently trusted process. Export with
+`--signing-key` and import with `--trusted-key`; supplying a trusted key makes
+a valid signature mandatory. Imports without a trusted key retain legacy
+compatibility but provide integrity only.
+
+Treat an unexpected checksum, signature, manifest, signer, or source-timestamp
+failure as a reason to reject the bundle and investigate the signing or
+transfer path. If a private key may be compromised, stop trusting its public
+key and rotate the pair manually.
 
 The maintained [threat model](docs/THREAT_MODEL.md) documents current trust
 boundaries, implemented controls, operator responsibilities, and limitations.

@@ -381,7 +381,7 @@ func TestSchemaVersionOneMigratesWithoutLosingComponents(t *testing.T) {
 		t.Fatalf("Open(v1) error = %v", err)
 	}
 	defer database.Close()
-	backups, err := filepath.Glob(path + ".pre-migration-v1-to-v8-*.backup")
+	backups, err := filepath.Glob(path + ".pre-migration-v1-to-v9-*.backup")
 	if err != nil {
 		t.Fatalf("find migration backup: %v", err)
 	}
@@ -503,10 +503,11 @@ func TestVersion009DatabaseFixtureRemainsReadable(t *testing.T) {
 		t.Fatalf("v0.0.9 assessments = %+v, %v", history, err)
 	}
 	feedImport, err := database.LatestFeedImport(ctx)
-	if err != nil || feedImport.SourceName != "fixture.bundle" || feedImport.KEVEntries != 1 {
+	if err != nil || feedImport.SourceName != "fixture.bundle" || feedImport.KEVEntries != 1 ||
+		feedImport.Signed || feedImport.SignatureVerified || feedImport.SignerKeyID != "" {
 		t.Fatalf("v0.0.9 feed import = %+v, %v", feedImport, err)
 	}
-	backups, err := filepath.Glob(path + ".pre-migration-v7-to-v8-*.backup")
+	backups, err := filepath.Glob(path + ".pre-migration-v7-to-v9-*.backup")
 	if err != nil || len(backups) != 1 {
 		t.Fatalf("v0.0.9 fixture migration backups = %v, error = %v; want one", backups, err)
 	}
@@ -1211,8 +1212,26 @@ func TestFeedImportIsAtomicAndRecordsProvenance(t *testing.T) {
 		KEVEntries: testFeedCatalog("new", "CVE-2026-12345").Vulnerabilities,
 	}
 	metadata := FeedImportMetadata{
-		FormatVersion: 1, BundleCreatedAt: synchronizedAt.Add(time.Minute),
+		FormatVersion: 2, BundleCreatedAt: synchronizedAt.Add(time.Minute),
 		SourceName: "transfer.bundle", ManifestSHA256: strings.Repeat("a", 64),
+		Signed: true, SignatureVerified: true,
+		SignerKeyID: "sha256:" + strings.Repeat("b", 64),
+	}
+	for name, invalid := range map[string]FeedImportMetadata{
+		"unsigned with signature provenance": func() FeedImportMetadata {
+			value := metadata
+			value.Signed = false
+			return value
+		}(),
+		"invalid signer key ID": func() FeedImportMetadata {
+			value := metadata
+			value.SignerKeyID = "sha256:not-a-fingerprint"
+			return value
+		}(),
+	} {
+		if _, _, err := validateIntelligenceImport(snapshot, invalid); err == nil {
+			t.Fatalf("validateIntelligenceImport(%s) error = nil", name)
+		}
 	}
 	if _, err := database.db.ExecContext(ctx, `CREATE TRIGGER fail_feed_import
 		BEFORE INSERT ON kev_syncs WHEN NEW.catalog_version = 'new'
@@ -1241,7 +1260,8 @@ func TestFeedImportIsAtomicAndRecordsProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ImportIntelligence() error = %v", err)
 	}
-	if result.Packages != 1 || result.Vulnerabilities != 1 || result.KEVEntries != 1 {
+	if result.Packages != 1 || result.Vulnerabilities != 1 || result.KEVEntries != 1 ||
+		!result.Signed || !result.SignatureVerified || result.SignerKeyID != metadata.SignerKeyID {
 		t.Fatalf("ImportIntelligence() = %+v", result)
 	}
 	newMatches, gotSynchronizedAt, err := database.LookupOSVSnapshot(ctx, newPackage)
@@ -1249,7 +1269,8 @@ func TestFeedImportIsAtomicAndRecordsProvenance(t *testing.T) {
 		t.Fatalf("imported OSV snapshot = %+v, %v, %v", newMatches, gotSynchronizedAt, err)
 	}
 	provenance, err := database.LatestFeedImport(ctx)
-	if err != nil || provenance.SourceName != metadata.SourceName || provenance.ManifestSHA256 != metadata.ManifestSHA256 {
+	if err != nil || provenance.SourceName != metadata.SourceName || provenance.ManifestSHA256 != metadata.ManifestSHA256 ||
+		!provenance.Signed || !provenance.SignatureVerified || provenance.SignerKeyID != metadata.SignerKeyID {
 		t.Fatalf("LatestFeedImport() = %+v, %v", provenance, err)
 	}
 }

@@ -101,9 +101,17 @@ matches, the complete CISA KEV catalog, source timestamps, counts, and
 provenance. It does not contain the product inventory or review history.
 
 Bundle manifests, strict file allowlists, size limits, source validation, and
-SHA-256 checksums detect corruption. They do not authenticate who created a
-bundle. Until signed bundles ship, the transfer path is part of the trust
-boundary.
+SHA-256 checksums detect corruption. Signed format-v2 bundles authenticate the
+exact manifest with Ed25519; the manifest binds the payload files by size and
+SHA-256 digest. The private signing key remains on the connected staging
+machine. Isolated systems receive only one or more public keys through a
+separately trusted provisioning path.
+
+When `--trusted-key` is supplied, import requires a signed bundle from one of
+those keys and rejects unsigned, modified, or differently signed input before
+database activation. Imports without a trusted key preserve format-v1
+compatibility but provide integrity only. Signature status and signer key ID
+are stored with feed-import provenance.
 
 ## Compatibility policy before 1.0
 

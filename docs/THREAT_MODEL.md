@@ -19,6 +19,8 @@ is deliberately scoped to behavior the project ships today.
 | User-selected CycloneDX document | Untrusted structured input |
 | OSV and CISA HTTP responses | Untrusted until parsed and validated |
 | Imported feed bundle | Untrusted until fully validated |
+| Feed signing private key | Secret; controlled by the staging operator |
+| Trusted feed public key | Authentic only if provisioned through a separate trusted path |
 | Local SQLite file and transfer path | Controlled by the operator |
 | Terminal and command arguments | Controlled by the local user |
 | The installed PSIRTMap binary | Trusted by the operator |
@@ -42,6 +44,11 @@ is deliberately scoped to behavior the project ships today.
 - Entry names, compressed contents, uncompressed sizes, JSON fields, counts,
   timestamps, and source records are validated.
 - SHA-256 checksums cover every payload file.
+- Format-v2 bundles sign the exact manifest with Ed25519.
+- Imports configured with a trusted public key require a valid signature from
+  one supplied key and reject unsigned or unknown-signer bundles.
+- Private signing-key files must be regular files and, on Unix-like systems,
+  must not be readable by group or others.
 - OSV and KEV activation occurs in one transaction after complete validation.
 - Seed-corpus fuzz tests exercise bundle reading on every normal test run.
 
@@ -70,8 +77,13 @@ is deliberately scoped to behavior the project ships today.
 
 ## Known limitations
 
-- Feed checksums detect corruption but do not authenticate the creator.
-  Signed bundles and configurable trusted keys are not yet implemented.
+- Legacy imports without `--trusted-key` accept unsigned bundles and do not
+  authenticate the creator. This compatibility mode is not appropriate where
+  creator authentication is required.
+- Signature verification proves control of a trusted private key, not that
+  upstream OSV or CISA content is correct or complete.
+- PSIRTMap does not currently provide key expiry, revocation lists, hardware
+  key support, or automatic trusted-key distribution.
 - The SQLite database is permission-restricted but not encrypted by PSIRTMap.
   Use operating-system disk encryption where confidentiality at rest matters.
 - A user or process that can modify the database or replace the trusted binary
@@ -91,6 +103,10 @@ is deliberately scoped to behavior the project ships today.
 - Protect the local account, database directory, and host storage.
 - Review SBOM provenance before import.
 - Use an approved, controlled path for offline bundle transfer.
+- Keep feed private keys only on controlled staging systems; provision and
+  verify public-key fingerprints independently of transferred bundles.
+- Use `--trusted-key` for security-sensitive imports and rotate trust manually
+  if a signing key may be compromised.
 - Investigate validation failures rather than bypassing them.
 - Keep vulnerability intelligence fresh and have a person disposition each
   potentially affected finding.

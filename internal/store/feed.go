@@ -24,10 +24,13 @@ type IntelligenceSnapshot struct {
 
 // FeedImportMetadata records the provenance of one validated portable bundle.
 type FeedImportMetadata struct {
-	FormatVersion   int
-	BundleCreatedAt time.Time
-	SourceName      string
-	ManifestSHA256  string
+	FormatVersion     int
+	BundleCreatedAt   time.Time
+	SourceName        string
+	ManifestSHA256    string
+	Signed            bool
+	SignatureVerified bool
+	SignerKeyID       string
 }
 
 // FeedImport summarizes one atomically committed bundle import.
@@ -42,6 +45,9 @@ type FeedImport struct {
 	Packages          int       `json:"packages"`
 	Vulnerabilities   int       `json:"vulnerabilities"`
 	KEVEntries        int       `json:"kev_entries"`
+	Signed            bool      `json:"signed"`
+	SignatureVerified bool      `json:"signature_verified"`
+	SignerKeyID       string    `json:"signer_key_id,omitempty"`
 }
 
 // LatestFeedImport returns the provenance of the most recently committed
@@ -49,14 +55,16 @@ type FeedImport struct {
 func (d *DB) LatestFeedImport(ctx context.Context) (FeedImport, error) {
 	var result FeedImport
 	var bundleCreatedAt, importedAt, osvSynchronizedAt, kevSynchronizedAt string
+	var signed, signatureVerified int
 	err := d.db.QueryRowContext(ctx, `SELECT format_version, bundle_created_at,
 		imported_at, source_name, manifest_sha256, osv_synchronized_at,
-		kev_synchronized_at, package_count, vulnerability_count, kev_entry_count
+		kev_synchronized_at, package_count, vulnerability_count, kev_entry_count,
+		signed, signature_verified, signer_key_id
 		FROM feed_imports ORDER BY id DESC LIMIT 1`).Scan(
 		&result.FormatVersion, &bundleCreatedAt, &importedAt,
 		&result.SourceName, &result.ManifestSHA256, &osvSynchronizedAt,
 		&kevSynchronizedAt, &result.Packages, &result.Vulnerabilities,
-		&result.KEVEntries,
+		&result.KEVEntries, &signed, &signatureVerified, &result.SignerKeyID,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return FeedImport{}, ErrSnapshotNotFound
@@ -79,6 +87,8 @@ func (d *DB) LatestFeedImport(ctx context.Context) (FeedImport, error) {
 		}
 		*target.into = parsed
 	}
+	result.Signed = signed == 1
+	result.SignatureVerified = signatureVerified == 1
 	return result, nil
 }
 
@@ -173,12 +183,14 @@ func (d *DB) ImportIntelligence(
 	_, err = transaction.ExecContext(ctx, `INSERT INTO feed_imports(
 		format_version, bundle_created_at, imported_at, source_name,
 		manifest_sha256, osv_synchronized_at, kev_synchronized_at,
-		package_count, vulnerability_count, kev_entry_count
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		package_count, vulnerability_count, kev_entry_count, signed,
+		signature_verified, signer_key_id
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		result.FormatVersion, formatTime(result.BundleCreatedAt), formatTime(result.ImportedAt),
 		result.SourceName, result.ManifestSHA256, formatTime(result.OSVSynchronizedAt),
 		formatTime(result.KEVSynchronizedAt), result.Packages,
-		result.Vulnerabilities, result.KEVEntries,
+		result.Vulnerabilities, result.KEVEntries, boolInteger(result.Signed),
+		boolInteger(result.SignatureVerified), result.SignerKeyID,
 	)
 	if err != nil {
 		return FeedImport{}, fmt.Errorf("record feed import: %w", err)
@@ -192,6 +204,7 @@ func (d *DB) ImportIntelligence(
 func validateIntelligenceImport(snapshot IntelligenceSnapshot, metadata FeedImportMetadata) (FeedImport, kev.Catalog, error) {
 	metadata.SourceName = strings.TrimSpace(metadata.SourceName)
 	metadata.ManifestSHA256 = strings.ToLower(strings.TrimSpace(metadata.ManifestSHA256))
+	metadata.SignerKeyID = strings.ToLower(strings.TrimSpace(metadata.SignerKeyID))
 	if metadata.FormatVersion <= 0 || metadata.BundleCreatedAt.IsZero() || metadata.SourceName == "" {
 		return FeedImport{}, kev.Catalog{}, errors.New("complete feed bundle provenance is required")
 	}
@@ -203,6 +216,18 @@ func validateIntelligenceImport(snapshot IntelligenceSnapshot, metadata FeedImpo
 	}
 	if _, err := hex.DecodeString(metadata.ManifestSHA256); err != nil {
 		return FeedImport{}, kev.Catalog{}, errors.New("feed manifest SHA-256 is invalid")
+	}
+	if !metadata.Signed {
+		if metadata.SignatureVerified || metadata.SignerKeyID != "" {
+			return FeedImport{}, kev.Catalog{}, errors.New("unsigned feed cannot contain signature provenance")
+		}
+	} else {
+		if !strings.HasPrefix(metadata.SignerKeyID, "sha256:") || len(metadata.SignerKeyID) != len("sha256:")+64 {
+			return FeedImport{}, kev.Catalog{}, errors.New("feed signer key ID is invalid")
+		}
+		if _, err := hex.DecodeString(strings.TrimPrefix(metadata.SignerKeyID, "sha256:")); err != nil {
+			return FeedImport{}, kev.Catalog{}, errors.New("feed signer key ID is invalid")
+		}
 	}
 	metadata.BundleCreatedAt = metadata.BundleCreatedAt.UTC()
 	if metadata.BundleCreatedAt.After(time.Now().UTC().Add(5 * time.Minute)) {
@@ -282,8 +307,16 @@ func validateIntelligenceImport(snapshot IntelligenceSnapshot, metadata FeedImpo
 		OSVSynchronizedAt: snapshot.OSVSync.SynchronizedAt.UTC(),
 		KEVSynchronizedAt: snapshot.KEVSync.SynchronizedAt.UTC(),
 		Packages:          len(snapshot.Packages), Vulnerabilities: len(seenVulnerabilities),
-		KEVEntries: len(catalog.Vulnerabilities),
+		KEVEntries: len(catalog.Vulnerabilities), Signed: metadata.Signed,
+		SignatureVerified: metadata.SignatureVerified, SignerKeyID: metadata.SignerKeyID,
 	}, catalog, nil
+}
+
+func boolInteger(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func replaceOSVSnapshot(ctx context.Context, transaction *sql.Tx, syncResult VulnerabilitySync, snapshots []PackageSnapshot) error {

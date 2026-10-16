@@ -426,6 +426,10 @@ func TestOfflineFeedExportImportWorkflow(t *testing.T) {
 	sourceDB := filepath.Join(directory, "connected.db")
 	targetDB := filepath.Join(directory, "isolated.db")
 	bundlePath := filepath.Join(directory, "transfer.bundle")
+	privateKeyPath := filepath.Join(directory, "feed-signing-key.pem")
+	publicKeyPath := filepath.Join(directory, "feed-signing-key.pub.pem")
+	otherPrivateKeyPath := filepath.Join(directory, "other-signing-key.pem")
+	otherPublicKeyPath := filepath.Join(directory, "other-signing-key.pub.pem")
 	querier := &inventoryQuerier{results: map[string]packageResult{
 		"npm:demo@1.0.0": {vulnerabilities: []osv.Vulnerability{{
 			ID: "GHSA-DEMO-2026", Aliases: []string{"CVE-2026-12345"},
@@ -464,13 +468,33 @@ func TestOfflineFeedExportImportWorkflow(t *testing.T) {
 	if !strings.Contains(stdout, "CISA KEV         ready") {
 		t.Fatalf("feed pull stdout = %q", stdout)
 	}
-	exitCode, stdout, stderr = runWithSourcesDatabase(t, sourceDB, nil, nil, "feed", "export", bundlePath)
+	exitCode, stdout, stderr = runWithSourcesDatabase(
+		t, sourceDB, nil, nil, "feed", "keygen",
+		"--private-key", privateKeyPath, "--public-key", publicKeyPath,
+	)
 	requireSuccess(t, exitCode, stderr)
-	for _, expected := range []string{"OFFLINE FEED EXPORTED", "Packages         1", "Vulnerabilities  1", "KEV entries      1"} {
+	for _, expected := range []string{"FEED SIGNING KEY CREATED", "Ed25519", "sha256:", "keep secret"} {
+		if !strings.Contains(stdout, expected) {
+			t.Errorf("feed keygen stdout = %q, want %q", stdout, expected)
+		}
+	}
+	exitCode, stdout, stderr = runWithSourcesDatabase(
+		t, sourceDB, nil, nil, "feed", "export", bundlePath, "--signing-key", privateKeyPath,
+	)
+	requireSuccess(t, exitCode, stderr)
+	for _, expected := range []string{
+		"OFFLINE FEED EXPORTED", "Packages         1", "Vulnerabilities  1",
+		"KEV entries      1", "SIGNED — not verified", "Signer key ID    sha256:",
+	} {
 		if !strings.Contains(stdout, expected) {
 			t.Errorf("feed export stdout = %q, want %q", stdout, expected)
 		}
 	}
+	exitCode, _, stderr = runWithSourcesDatabase(
+		t, sourceDB, nil, nil, "feed", "keygen",
+		"--private-key", otherPrivateKeyPath, "--public-key", otherPublicKeyPath,
+	)
+	requireSuccess(t, exitCode, stderr)
 
 	for _, command := range [][]string{
 		{"product", "add", "gateway"},
@@ -480,11 +504,29 @@ func TestOfflineFeedExportImportWorkflow(t *testing.T) {
 		exitCode, _, stderr = runWithSourcesDatabase(t, targetDB, nil, nil, command...)
 		requireSuccess(t, exitCode, stderr)
 	}
-	exitCode, stdout, stderr = runWithSourcesDatabase(t, targetDB, nil, nil, "feed", "import", bundlePath)
+	exitCode, _, stderr = runWithSourcesDatabase(
+		t, targetDB, nil, nil, "feed", "import", bundlePath, "--trusted-key", otherPublicKeyPath,
+	)
+	if exitCode != 1 || !strings.Contains(stderr, "is not trusted") {
+		t.Fatalf("feed import with wrong key = code %d, stderr %q", exitCode, stderr)
+	}
+	exitCode, stdout, stderr = runWithSourcesDatabase(
+		t, targetDB, nil, nil, "feed", "import", bundlePath, "--trusted-key", publicKeyPath,
+	)
 	requireSuccess(t, exitCode, stderr)
-	for _, expected := range []string{"OFFLINE FEED IMPORTED", "SHA-256 checksums verified", "Packages         1", "KEV entries      1"} {
+	for _, expected := range []string{
+		"OFFLINE FEED IMPORTED", "SHA-256 checksums verified", "Packages         1",
+		"KEV entries      1", "Ed25519 signature verified", "Signer key ID    sha256:",
+	} {
 		if !strings.Contains(stdout, expected) {
 			t.Errorf("feed import stdout = %q, want %q", stdout, expected)
+		}
+	}
+	exitCode, stdout, stderr = runWithSourcesDatabase(t, targetDB, nil, nil, "doctor", "--json")
+	requireSuccess(t, exitCode, stderr)
+	for _, expected := range []string{`"signed": true`, `"signature_verified": true`, `"signer_key_id": "sha256:`} {
+		if !strings.Contains(stdout, expected) {
+			t.Errorf("doctor JSON after signed feed import = %q, want %q", stdout, expected)
 		}
 	}
 	exitCode, stdout, stderr = runWithSourcesDatabase(t, targetDB, nil, nil, "scan", "gateway@1.0")

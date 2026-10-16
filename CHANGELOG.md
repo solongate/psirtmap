@@ -6,6 +6,31 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Ed25519 key generation, signed format-v2 offline feed bundles, and explicit
+  trusted-public-key verification across CLI and guided dashboard flows.
+- Persistent signer fingerprint and signature-verification provenance for
+  every imported feed.
+- Rejection tests for unknown signers, altered signatures, unsigned bundles
+  under a trusted-key policy, and overly broad private-key permissions.
+
+### Changed
+
+- Database schema migrated to version 9 with backward-compatible defaults for
+  earlier unsigned feed-import history.
+- Feed help, architecture, security policy, threat model, and air-gapped setup
+  now document key custody and authenticated transfer.
+
+### Security
+
+- Supplying `--trusted-key` now rejects unsigned, modified, or differently
+  signed feed bundles before vulnerability data is activated.
+- Private signing keys are created without overwrite using `0600` permissions
+  and insecure Unix permission modes are rejected when loading.
+- The minimum Go toolchain is now 1.27.2, which includes standard-library
+  fixes reported by `govulncheck` against Go 1.27.1.
+
 ## [0.0.10] - 2026-10-08
 
 ### Added

@@ -49,7 +49,9 @@ is useful evidence; it is not proof that a shipped product is exploitable.
 
 ## What works today
 
-The current release, `v0.0.10`, includes:
+The current codebase includes the following capabilities. The latest tagged
+release is `v0.0.10`; features marked `Unreleased` in the changelog land in the
+next release.
 
 - A responsive, keyboard-driven terminal dashboard.
 - A guided first-run flow that creates a product, release, and component
@@ -74,8 +76,11 @@ The current release, `v0.0.10`, includes:
   `not-affected`, and `fixed` decisions.
 - Reviewer, reason, evidence, timestamp, and complete decision history.
 - Versioned, checksummed offline feed export and atomic import.
-- Dashboard actions for online updates, offline feed import, and feed export.
-- Persistent bundle provenance, source freshness, and import timestamps.
+- Optional Ed25519 feed signing with explicit trusted-public-key verification.
+- Dashboard actions for online updates, signing-key generation, verified
+  offline feed import, and signed feed export.
+- Persistent bundle provenance, signature status, signer identity, source
+  freshness, and import timestamps.
 - An explicit `--live` scan mode for direct OSV checks.
 - Human-readable and deterministic JSON output.
 - Single-binary builds for macOS, Linux, and Windows.
@@ -211,8 +216,9 @@ Use JSON output in scripts:
 psirtmap product list --json
 psirtmap release import AG-200@2.2 ./firmware-2.2.cdx.json --json
 psirtmap sync --json
-psirtmap feed export ./psirtmap-feed.bundle --json
-psirtmap feed import ./psirtmap-feed.bundle --json
+psirtmap feed keygen --private-key ./feed-key.pem --public-key ./feed-key.pub.pem --json
+psirtmap feed export ./psirtmap-feed.bundle --signing-key ./feed-key.pem --json
+psirtmap feed import ./psirtmap-feed.bundle --trusted-key ./feed-key.pub.pem --json
 psirtmap scan AG-200@2.2 --json
 psirtmap findings --all --json
 psirtmap findings show AG-200@2.2 CVE-2026-12345 --json
@@ -272,19 +278,32 @@ remediates a particular product.
 
 ## Air-gapped transfer
 
-On a connected staging machine, create the same component inventory used in
-the isolated environment, then download and export its intelligence:
+Generate a signing key pair once on a controlled, connected staging machine.
+Keep the private key secret there. Provision the public key to isolated
+machines through an independently trusted process:
+
+```sh
+psirtmap feed keygen \
+  --private-key ./psirtmap-feed-signing-key.pem \
+  --public-key ./psirtmap-feed-signing-key.pub.pem
+```
+
+Create the same component inventory used in the isolated environment, then
+download, sign, and export its intelligence:
 
 ```sh
 psirtmap --database ./staging.db feed pull
-psirtmap --database ./staging.db feed export ./psirtmap-feed.bundle
+psirtmap --database ./staging.db feed export ./psirtmap-feed.bundle \
+  --signing-key ./psirtmap-feed-signing-key.pem
 ```
 
-Move the `.bundle` through the organization's approved transfer process. On
-the isolated machine:
+Move the `.bundle` through the organization's approved transfer process. Do
+not move the private key. On the isolated machine, require authentication with
+the provisioned public key:
 
 ```sh
-psirtmap feed import ./psirtmap-feed.bundle
+psirtmap feed import ./psirtmap-feed.bundle \
+  --trusted-key ./psirtmap-feed-signing-key.pub.pem
 psirtmap scan AG-200@2.2
 ```
 
@@ -295,11 +314,17 @@ therefore cover every package version that the isolated installation needs to
 scan.
 
 Each bundle is a versioned ZIP with a manifest and SHA-256 checksum for every
-data file. Import rejects missing, extra, oversized, malformed, or modified
-content before replacing either local snapshot; OSV and KEV activation and
-provenance recording happen in one database transaction. Checksums detect
-accidental corruption, but they do not prove who created a bundle. Accept feed
-files only through a trusted transfer path. Bundle signing is not yet shipped.
+data file. A signed bundle authenticates that exact manifest with Ed25519; the
+manifest authenticates the payload checksums. Import with `--trusted-key`
+rejects unsigned bundles, unknown signers, invalid signatures, and modified
+content before replacing either local snapshot. OSV and KEV activation plus
+provenance recording happen in one database transaction.
+
+For backward compatibility, imports without `--trusted-key` still accept
+legacy unsigned bundles and label signed bundles as unverified. This mode
+checks integrity but does not authenticate the creator. Security-sensitive
+air-gapped workflows should always provision a public key separately and use
+`--trusted-key`. Key files and bundles are never overwritten automatically.
 
 Every successful normal scan reconciles its matches with the release's saved
 finding history. A first match is `new`, a repeated match is `existing`, a
@@ -345,7 +370,7 @@ The explicit `--database` option takes precedence over `PSIRTMAP_DB`.
 
 ## Build from source
 
-PSIRTMap requires Go 1.27 or newer.
+PSIRTMap requires Go 1.27.2 or newer.
 
 ```sh
 go test ./...

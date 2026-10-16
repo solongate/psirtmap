@@ -20,7 +20,7 @@ Inventory commands:
   release     Add, import, and list product releases
   component   Add and list release components
   sync        Update local OSV and CISA KEV vulnerability intelligence
-  feed        Pull, export, and import transferable offline feed bundles
+  feed        Pull, sign, export, and verify transferable offline feed bundles
   scan        Match a release and prioritize findings with local KEV data
   findings    List durable potential-impact findings
   assess      Record and inspect human impact decisions
@@ -126,17 +126,24 @@ func printFeedUsage(writer io.Writer) {
 
 Usage:
   psirtmap [--database <path>] feed pull [--json]
-  psirtmap [--database <path>] feed export [output.bundle] [--json]
-  psirtmap [--database <path>] feed import <input.bundle> [--json]
+  psirtmap feed keygen [--private-key <path>] [--public-key <path>] [--json]
+  psirtmap [--database <path>] feed export [output.bundle]
+    [--signing-key <private.pem>] [--json]
+  psirtmap [--database <path>] feed import <input.bundle>
+    [--trusted-key <public.pem>]... [--json]
 
 "feed pull" downloads inventory-scoped OSV matches and the complete CISA KEV
 catalog on an internet-connected machine. "feed export" packages the active
-snapshots into a versioned ZIP bundle with per-file SHA-256 checksums. After a
-controlled transfer, "feed import" validates the complete bundle before
-atomically replacing both snapshots in the isolated database.
+snapshots into a versioned ZIP bundle with per-file SHA-256 checksums. Generate
+an Ed25519 key pair once with "feed keygen", keep the private key on the
+connected staging system, and sign exports with --signing-key. Provision only
+the public key to isolated systems and import with --trusted-key.
 
-Checksums detect accidental corruption; they do not authenticate who created a
-bundle. Accept bundles only through your organization's trusted transfer path.`)
+Supplying --trusted-key makes a valid signature from one supplied key mandatory;
+unsigned, modified, or differently signed bundles are rejected before database
+activation. Without --trusted-key, legacy unsigned bundles remain compatible
+and signed bundles are reported as unverified. Existing key or bundle files are
+never overwritten.`)
 }
 
 func printFindingsUsage(writer io.Writer) {
