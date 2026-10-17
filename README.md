@@ -33,7 +33,7 @@ firmware, and embedded-software manufacturers.
       <a href="https://www.bestpractices.dev/projects/15533/baseline-2"><img src="https://www.bestpractices.dev/badge_static/baseline-2" alt="OpenSSF Baseline 2" height="20"></a>
       <a href="https://www.bestpractices.dev/projects/15533/baseline-3"><img src="https://www.bestpractices.dev/badge_static/baseline-3" alt="OpenSSF Baseline 3" height="20"></a><br>
       <a href="https://scorecard.dev/viewer/?uri=github.com/solongate/psirtmap"><img src="https://api.securityscorecards.dev/projects/github.com/solongate/psirtmap/badge" alt="OpenSSF Scorecard" height="20"></a>
-      <a href="https://github.com/ossf/allstar"><img src="https://img.shields.io/badge/OpenSSF-Allstar-3ba9ee.svg" alt="OpenSSF Allstar" height="20"></a>
+      <a href="https://github.com/ossf/allstar"><img src="https://img.shields.io/badge/openssf-Allstar-3ba9ee.svg" alt="openssf Allstar" height="20"></a>
     </td>
   </tr>
 </table>
