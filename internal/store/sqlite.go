@@ -667,6 +667,9 @@ func (d *DB) migrate(ctx context.Context) error {
 			{table: "findings", name: "vulnerability_source", definition: `TEXT NOT NULL DEFAULT 'OSV'`},
 		}
 		for _, column := range columns {
+			if !safeIdentifier(column.table) || !safeIdentifier(column.name) {
+				return fmt.Errorf("apply schema migration: unsafe identifier %q.%q", column.table, column.name)
+			}
 			exists, err := sqliteColumnExists(ctx, transaction, column.table, column.name)
 			if err != nil {
 				return fmt.Errorf("inspect schema migration: %w", err)
@@ -697,6 +700,9 @@ func (d *DB) migrate(ctx context.Context) error {
 			{name: "signer_key_id", definition: `TEXT NOT NULL DEFAULT ''`},
 		}
 		for _, column := range columns {
+			if !safeIdentifier(column.name) {
+				return fmt.Errorf("apply schema migration: unsafe identifier %q", column.name)
+			}
 			exists, err := sqliteColumnExists(ctx, transaction, "feed_imports", column.name)
 			if err != nil {
 				return fmt.Errorf("inspect schema migration: %w", err)
@@ -720,7 +726,31 @@ func (d *DB) migrate(ctx context.Context) error {
 	return nil
 }
 
+// safeIdentifier reports whether s is safe to interpolate into DDL as a bare
+// SQL identifier (a table or column name). SQLite has no way to bind an
+// identifier as a query parameter, so migration code that builds ALTER
+// TABLE / PRAGMA statements from Go-side names must validate them against an
+// allowlist instead of trusting them unescaped.
+func safeIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r == '_':
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9' && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func sqliteColumnExists(ctx context.Context, transaction *sql.Tx, table, column string) (bool, error) {
+	if !safeIdentifier(table) {
+		return false, fmt.Errorf("unsafe identifier %q", table)
+	}
 	rows, err := transaction.QueryContext(ctx, "PRAGMA table_info("+table+")")
 	if err != nil {
 		return false, err

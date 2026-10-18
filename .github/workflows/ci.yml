@@ -104,11 +104,13 @@ jobs:
 
   # SonarQube Cloud analysis: quality gate, security/reliability/maintainability
   # ratings and coverage, surfaced as README badges. Skipped on fork PRs, which
-  # cannot see the SONAR_TOKEN secret.
+  # cannot see the SONAR_TOKEN secret, and skipped entirely when no token is
+  # configured at all, so a repo without one shows a skipped check instead of
+  # a permanently failing one.
   sonarqube:
     name: SonarQube Cloud
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    if: (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && secrets.SONAR_TOKEN != ''
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
