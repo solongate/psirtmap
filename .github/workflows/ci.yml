@@ -110,21 +110,30 @@ jobs:
   sonarqube:
     name: SonarQube Cloud
     runs-on: ubuntu-latest
-    if: (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && secrets.SONAR_TOKEN != ''
+    # The `secrets` context is not valid in a job-level `if:` at all (it is
+    # only readable from steps, env, and with) - putting it there does not
+    # evaluate to false, it fails workflow validation outright, so every push
+    # and PR failed before a single job was created. The fork/no-token guards
+    # live on the steps below instead.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: secrets.SONAR_TOKEN != ''
         with:
           fetch-depth: 0
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: secrets.SONAR_TOKEN != ''
         with:
           go-version-file: go.mod
           cache: false
 
       - name: coverage
+        if: secrets.SONAR_TOKEN != ''
         run: go test -count=1 -coverprofile=coverage.out ./... || true
 
       - name: SonarQube Cloud scan
+        if: secrets.SONAR_TOKEN != ''
         uses: SonarSource/sonarqube-scan-action@299e4b793aaa83bf2aba7c9c14bedbb485688ec4 # v7.1.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
