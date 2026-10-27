@@ -8,6 +8,7 @@ triaging private security advisories.
 |---|---|---|
 | Cinar Yildirim | [@codeyevsky](https://github.com/codeyevsky) | Maintainer — repository admin, release management, security advisory triage |
 | Emirhan Demir | [@qarademir](https://github.com/qarademir) | Maintainer — repository admin, release management, security advisory triage |
+| Kaan Gültekin | [@GamehunterKaan](https://github.com/GamehunterKaan) | Maintainer — repository admin, release management, security advisory triage |
 
 Other collaborators may hold read access for review and testing but do not
 have merge, release, or security-advisory permissions.
