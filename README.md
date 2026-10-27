@@ -1,10 +1,4 @@
-<table align="center">
-  <tr>
-    <td align="center" bgcolor="#0d1117">
-      <img src="docs/assets/solongate-psirtmap-logo.png" alt="SolonGate PSIRTMap" width="430">
-    </td>
-  </tr>
-</table>
+![PSIRTMap — vulnerability impact tracking for shipped products](docs/assets/psirtmap-hero.png)
 
 <div align="center">
 
@@ -46,8 +40,6 @@ firmware, and embedded-software manufacturers.
     </td>
   </tr>
 </table>
-
-![PSIRTMap — vulnerability impact tracking for shipped products](docs/assets/psirtmap-hero.png)
 
 > [!IMPORTANT]
 > PSIRTMap is pre-1.0. Normal release scans use local OSV and CISA KEV
