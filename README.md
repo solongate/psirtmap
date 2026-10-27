@@ -247,7 +247,11 @@ psirtmap assess history AG-200@2.2 CVE-2026-12345
 The import accepts CycloneDX JSON 1.2–1.7, walks nested components, derives
 OSV identities from package URLs, records the document hash, and safely merges
 repeated imports. Components without a supported package URL are reported as
-skipped. Manual component entry remains available for demos and corrections.
+skipped. Alpine, Debian, and Ubuntu packages are matched against their release,
+such as `Debian:12`, from the package URL's `distro` qualifier, and against
+their source package, such as `openssl` for `libssl3`, from `upstream`; those
+without a release are skipped. Manual component entry remains available for
+demos and corrections.
 An [example device SBOM](examples/ag-200/firmware-2.2.cdx.json) is included.
 
 Query one package without adding it to the inventory:

@@ -242,6 +242,9 @@ func convertComponent(raw cycloneDXComponent) (Component, *SkippedComponent) {
 		return skipped(fmt.Sprintf("component version %q conflicts with package URL version %q", componentVersion, purl.Version))
 	}
 
+	if release, distro := distroEcosystem(purl); distro && release == "" {
+		return skipped("package URL needs a distro qualifier with a release, such as distro=alpine-3.17.2 or distro=debian-12, to select an OSV release")
+	}
 	ecosystem, name, ok := osvIdentity(purl)
 	if !ok {
 		return skipped(fmt.Sprintf("package URL type %q is not mapped to an OSV ecosystem", purl.Type))
@@ -250,6 +253,13 @@ func convertComponent(raw cycloneDXComponent) (Component, *SkippedComponent) {
 		return skipped("package URL does not contain an OSV package name")
 	}
 	purl.Version = version
+	if _, distro := distroEcosystem(purl); distro {
+		// Advisories use the source version, which can differ from the
+		// installed package by an epoch or rebuild suffix.
+		if _, sourceVersion := upstreamPackage(purl); sourceVersion != "" {
+			version = sourceVersion
+		}
+	}
 	return Component{
 		Ecosystem: ecosystem,
 		Name:      name,
@@ -298,16 +308,10 @@ func osvIdentity(purl packageurl.PackageURL) (string, string, bool) {
 		return "Bitnami", purl.Name, true
 	case packageurl.TypeSwift:
 		return "SwiftURL", joined("/"), true
-	case packageurl.TypeApk:
-		if firstNamespaceSegment(purl.Namespace) == "alpine" {
-			return "Alpine", purl.Name, true
-		}
-	case packageurl.TypeDebian:
-		switch firstNamespaceSegment(purl.Namespace) {
-		case "debian":
-			return "Debian", purl.Name, true
-		case "ubuntu":
-			return "Ubuntu", purl.Name, true
+	case packageurl.TypeApk, packageurl.TypeDebian:
+		if ecosystem, _ := distroEcosystem(purl); ecosystem != "" {
+			name, _ := upstreamPackage(purl)
+			return ecosystem, name, true
 		}
 	case packageurl.TypeRPM:
 		switch firstNamespaceSegment(purl.Namespace) {
@@ -318,6 +322,53 @@ func osvIdentity(purl packageurl.PackageURL) (string, string, bool) {
 		}
 	}
 	return "", "", false
+}
+
+// distroEcosystem returns the release-specific OSV ecosystem, such as
+// Alpine:v3.17 or Debian:12, from the distro qualifier of an Alpine, Debian,
+// or Ubuntu package URL. OSV evaluates these version ranges per release: a
+// bare "Alpine" query matches nothing and a bare "Debian" query merges every
+// release. distro reports whether the package URL names one of them at all.
+func distroEcosystem(purl packageurl.PackageURL) (ecosystem string, distro bool) {
+	namespace := firstNamespaceSegment(purl.Namespace)
+	switch {
+	case purl.Type == packageurl.TypeApk && namespace == "alpine":
+	case purl.Type == packageurl.TypeDebian && (namespace == "debian" || namespace == "ubuntu"):
+	default:
+		return "", false
+	}
+	qualifier := strings.ToLower(strings.TrimSpace(purl.Qualifiers.Map()["distro"]))
+	major, rest, _ := strings.Cut(strings.TrimPrefix(qualifier, namespace+"-"), ".")
+	minor, _, _ := strings.Cut(rest, ".")
+	switch {
+	case !isDigits(major):
+		return "", true
+	case namespace == "debian":
+		return "Debian:" + major, true
+	case !isDigits(minor):
+		return "", true
+	case namespace == "alpine":
+		return "Alpine:v" + major + "." + minor, true
+	case minor == "04" && (major[len(major)-1]-'0')%2 == 0:
+		return "Ubuntu:" + major + "." + minor + ":LTS", true
+	default:
+		return "Ubuntu:" + major + "." + minor, true
+	}
+}
+
+// upstreamPackage returns the source package named by the upstream
+// qualifier, such as openssl for libssl3, and its version when it differs from
+// the installed package. Distribution advisories are keyed by source package.
+func upstreamPackage(purl packageurl.PackageURL) (name, version string) {
+	name, version, _ = strings.Cut(strings.TrimSpace(purl.Qualifiers.Map()["upstream"]), "@")
+	if name == "" {
+		return purl.Name, ""
+	}
+	return name, version
+}
+
+func isDigits(value string) bool {
+	return value != "" && strings.IndexFunc(value, func(r rune) bool { return r < '0' || r > '9' }) < 0
 }
 
 func firstNamespaceSegment(namespace string) string {

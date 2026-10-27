@@ -95,6 +95,10 @@ state, including changes listed as **Unreleased** in the changelog.
   remains required.
 - Inventory-scoped OSV snapshots cover only package versions synchronized by
   the connected staging inventory.
+- Alpine, Debian, and Ubuntu packages are matched only when their package URL
+  names a release in its `distro` qualifier. Without an `upstream` qualifier,
+  the installed package name is queried and advisories filed under a different
+  source package can be missed.
 - Evidence is currently stored as text or a reference; PSIRTMap does not
   encrypt, upload, or validate an external evidence repository.
 

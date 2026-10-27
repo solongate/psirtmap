@@ -615,7 +615,7 @@ func TestReleaseImportCycloneDXWorkflow(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &components); err != nil {
 		t.Fatalf("decode imported components %q: %v", stdout, err)
 	}
-	if len(components) != 3 || components[0].Ecosystem != "Alpine" || !strings.HasPrefix(components[0].PURL, "pkg:apk/alpine/") {
+	if len(components) != 3 || components[0].Ecosystem != "Alpine:v3.17" || !strings.HasPrefix(components[0].PURL, "pkg:apk/alpine/") {
 		t.Fatalf("imported components = %+v", components)
 	}
 
