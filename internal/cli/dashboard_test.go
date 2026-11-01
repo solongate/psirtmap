@@ -6,6 +6,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -659,6 +660,62 @@ func TestDashboardRecordsAndDisplaysAssessmentHistory(t *testing.T) {
 		}
 	}
 	assertDashboardFits(t, content, 80, 24)
+}
+
+func TestDashboardExportsReviewedReleaseAsVEX(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	database := newDashboardTestDatabase(t)
+	if _, err := database.CreateProduct(ctx, "AG-200", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateRelease(ctx, "AG-200", "2.2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ReconcileFindings(ctx, "AG-200", "2.2", []store.FindingMatch{{
+		Ecosystem: "Alpine", Component: "openssl", ComponentVersion: "3.0.8",
+		VulnerabilityID: "CVE-2026-VEX",
+	}}, "local-osv-snapshot", time.Now(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateAssessment(ctx, store.AssessmentTarget{
+		Product: "AG-200", Release: "2.2", VulnerabilityID: "CVE-2026-VEX",
+	}, store.AssessmentInput{
+		Status: store.AssessmentNotAffected, Reason: "Feature disabled", Reviewer: "emirhan",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	model := newDashboardModel(ctx, database, &dashboardQuerier{}, nil)
+	loadDashboard(t, model)
+	model.screen = screenFindings
+	model.focusMenu = false
+	model.Update(dashboardKey("v"))
+	if model.form.kind != formVEXExport || len(model.form.fields) != 2 {
+		t.Fatalf("VEX export form = %+v", model.form)
+	}
+	if got := model.form.fields[0].input.Value(); got != "AG-200@2.2" {
+		t.Fatalf("VEX release default = %q", got)
+	}
+	outputPath := filepath.Join(t.TempDir(), "AG-200-2.2.vex.cdx.json")
+	model.form.fields[1].input.SetValue(outputPath)
+	message := model.saveForm()().(dashboardSavedMsg)
+	if message.err != nil {
+		t.Fatalf("VEX export error = %v", message.err)
+	}
+	if !strings.Contains(message.message, "Exported 1 reviewed findings") || !strings.Contains(message.message, outputPath) {
+		t.Fatalf("VEX export message = %q", message.message)
+	}
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read VEX output: %v", err)
+	}
+	for _, expected := range []string{`"specVersion": "1.6"`, `"state": "not_affected"`, "Feature disabled"} {
+		if !strings.Contains(string(data), expected) {
+			t.Errorf("VEX output missing %q: %s", expected, data)
+		}
+	}
 }
 
 func TestDashboardReportsScanFailure(t *testing.T) {

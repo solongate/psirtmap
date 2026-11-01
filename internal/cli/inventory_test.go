@@ -1013,7 +1013,7 @@ func TestGlobalDatabaseOptionValidation(t *testing.T) {
 func TestInventoryHelpDoesNotCreateDatabase(t *testing.T) {
 	t.Parallel()
 
-	for _, command := range []string{"init", "product", "release", "component", "sync", "feed", "scan", "findings", "assess", "doctor", "dashboard", "ui"} {
+	for _, command := range []string{"init", "product", "release", "component", "sync", "feed", "scan", "findings", "assess", "vex", "doctor", "dashboard", "ui"} {
 		command := command
 		t.Run(command, func(t *testing.T) {
 			t.Parallel()

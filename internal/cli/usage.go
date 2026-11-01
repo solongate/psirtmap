@@ -27,6 +27,7 @@ Inventory commands:
   scan        Match a release and prioritize findings with local KEV data
   findings    List durable potential-impact findings
   assess      Record and inspect human impact decisions
+  vex         Export human decisions as CycloneDX VEX
   doctor      Check local installation, inventory, and feed readiness
 
 Other commands:
@@ -191,6 +192,26 @@ Statuses:
 If the vulnerability matches multiple components in the same release, use
 --component to select the exact component-level finding. Every decision is
 appended to local history; earlier assessments are never overwritten.`)
+}
+
+func printVEXUsage(writer io.Writer) {
+	fmt.Fprintln(writer, `Export the latest human assessment for each finding as CycloneDX VEX JSON.
+
+Usage:
+  psirtmap [--database <path>] vex export <product>@<release> [output.cdx.json] [--json]
+
+Only findings with a saved human assessment are exported. The latest decision
+is authoritative, while the first-issued and last-updated timestamps preserve
+the assessment timeline. The four PSIRTMap states map to CycloneDX as follows:
+
+  investigating  -> in_triage
+  affected       -> exploitable
+  not-affected   -> not_affected
+  fixed          -> resolved
+
+If output is omitted, PSIRTMap writes <product>-<release>.vex.cdx.json in the
+current directory. Existing files are never overwritten. Export is entirely
+local and does not require internet access.`)
 }
 
 func printDashboardUsage(writer io.Writer) {

@@ -1,4 +1,9 @@
-# Vulnerability Exploitability eXchange (VEX)
+# PSIRTMap dependency VEX register
+
+This file is the maintainer exception register for vulnerabilities in
+PSIRTMap's own Go dependencies. It is separate from the product-facing
+`psirtmap vex export` command and its generated CycloneDX documents. See the
+[VEX export guide](VEX_EXPORT.md) for that workflow.
 
 This document tracks third-party vulnerabilities that `govulncheck` or the CI
 dependency review flags against a component PSIRTMap depends on, where a

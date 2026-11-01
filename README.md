@@ -104,8 +104,13 @@ The current release, `v0.0.11`, includes:
   seeds, JSON output contracts, and reachability-aware dependency checks.
 - No account, database server, or PSIRTMap cloud service.
 
-See the [roadmap](ROADMAP.md) for the ordered path to VEX and later PSIRT
-workflow capabilities.
+See the [roadmap](ROADMAP.md) for release status and later PSIRT workflow
+capabilities.
+
+The `main` branch also contains the next, not-yet-released capability:
+CycloneDX 1.6 VEX export from saved human assessments through both the CLI and
+the guided Findings screen. It will be included in the release after
+`v0.0.11`.
 
 ## Install
 
@@ -201,6 +206,7 @@ reviewing findings. Shortcuts are optional.
 | `i` | Import CycloneDX JSON from **Releases** |
 | `Ctrl+O` | Browse for a file while a file field is active |
 | `a` or `Enter` | Assess the selected finding from **Findings** |
+| `v` | Export reviewed findings as CycloneDX VEX from **Findings** |
 | `u` | Update local OSV and CISA KEV data; this step uses the internet |
 | `s` or `Enter` | Scan the selected release |
 | `r` | Refresh local inventory |
@@ -234,6 +240,7 @@ psirtmap assess AG-200@2.2 CVE-2026-12345 \
   --reviewer emirhan \
   --reason "Vulnerable functionality is disabled in this firmware build"
 psirtmap assess history AG-200@2.2 CVE-2026-12345
+psirtmap vex export AG-200@2.2 ./AG-200-2.2.vex.cdx.json
 ```
 
 The import accepts CycloneDX JSON 1.2–1.7, walks nested components, derives
@@ -270,6 +277,7 @@ psirtmap scan AG-200@2.2 --json
 psirtmap findings --all --json
 psirtmap findings show AG-200@2.2 CVE-2026-12345 --json
 psirtmap assess history AG-200@2.2 CVE-2026-12345 --json
+psirtmap vex export AG-200@2.2 ./AG-200-2.2.vex.cdx.json --json
 ```
 
 Authenticated-feed commands also support JSON:
@@ -295,6 +303,9 @@ OSV API --------- psirtmap sync -------> local OSV snapshot
 CISA KEV catalog -/             \------> local KEV snapshot
                                          |
                               offline release scan -> durable finding -> human assessment
+                                                                         |
+                                                                         v
+                                                              CycloneDX VEX JSON
 ```
 
 For example:
@@ -392,6 +403,15 @@ history entry. Final decisions—`affected`, `not-affected`, and
 `fixed`—require a reason. `investigating` may be recorded while evidence is
 still being collected. Re-scanning refreshes match evidence without erasing or
 resetting the human decision.
+
+`psirtmap vex export` converts the latest decision for every reviewed
+component-level finding in one release into CycloneDX 1.6 VEX JSON. It exports
+`investigating` as `in_triage`, `affected` as `exploitable`, `not-affected` as
+`not_affected`, and `fixed` as `resolved`. Unreviewed findings remain out of
+the document instead of being presented as a decision. Export is local,
+existing files are never overwritten, and free-text reasons remain detail
+rather than being guessed into a structured VEX justification. See the
+[VEX export guide](docs/VEX_EXPORT.md) for the exact data contract.
 
 The explicit data model is:
 

@@ -9,6 +9,7 @@ state, including changes listed as **Unreleased** in the changelog.
 
 - Product names, shipped releases, and component inventory.
 - Finding history, reviewer decisions, reasons, and evidence references.
+- Exported VEX documents containing product, component, and assessment data.
 - The integrity and freshness of OSV and CISA KEV data.
 - The integrity of database migrations and offline feed imports.
 - The availability of the last known-good local database.
@@ -62,6 +63,15 @@ state, including changes listed as **Unreleased** in the changelog.
 - The application refuses databases created by a newer schema version.
 - A fixed v0.0.9 database fixture and migration tests protect compatibility.
 
+### Accidental VEX overwrite or disclosure
+
+- VEX export reads local state and does not mutate the database.
+- Documents are assembled and encoded before publication.
+- Output files use private permissions and existing paths are never replaced.
+- Product, component, reviewer, reason, and evidence data are intentionally
+  present in the output; operators choose and protect the destination.
+- VEX export performs no network request.
+
 ### Vulnerable Go dependencies or standard library paths
 
 - CI verifies the module download and checksum database state.
@@ -101,6 +111,12 @@ state, including changes listed as **Unreleased** in the changelog.
   source package can be missed.
 - Evidence is currently stored as text or a reference; PSIRTMap does not
   encrypt, upload, or validate an external evidence repository.
+- VEX documents are not signed or encrypted by PSIRTMap. Transfer and
+  authenticity controls for exported assessment data remain an operator
+  responsibility.
+- Free-text reasons are exported as analysis detail. PSIRTMap does not infer a
+  CycloneDX `justification`; a future structured field is required before one
+  can be emitted without guessing.
 
 ## Operator responsibilities
 

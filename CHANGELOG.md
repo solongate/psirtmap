@@ -6,6 +6,17 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Offline CycloneDX 1.6 VEX export for the latest human assessment on every
+  reviewed component-level finding in a shipped product release.
+- A guided VEX export form on the dashboard's Findings screen.
+- Deterministic component and vulnerability references, assessment timeline
+  metadata, reviewer/evidence properties, and current KEV/match context in
+  exported VEX documents.
+- Private, no-overwrite VEX file publication that refuses to replace an
+  existing file.
+
 ## [0.0.11] - 2026-10-17
 
 ### Added
