@@ -7,9 +7,7 @@ package vex
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -21,7 +19,7 @@ import (
 
 const (
 	SpecVersion = "1.6"
-	schemaURL   = "http://cyclonedx.org/schema/bom-1.6.schema.json"
+	schemaURL   = "https://cyclonedx.org/schema/bom-1.6.schema.json"
 )
 
 var referenceNamespace = uuid.MustParse("b9dabb95-b0a9-57ec-a28c-f2b96b55a94f")
@@ -241,38 +239,31 @@ func Write(path string, bom *cdx.BOM) error {
 	if bom == nil {
 		return errors.New("VEX document is required")
 	}
-	parent := filepath.Dir(path)
-	if _, err := os.Stat(path); err == nil {
-		return fmt.Errorf("VEX output %q already exists", path)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("inspect VEX output target: %w", err)
-	}
-
-	temporary, err := os.CreateTemp(parent, ".psirtmap-vex-*.tmp")
+	output, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return fmt.Errorf("create temporary VEX output: %w", err)
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("VEX output %q already exists", path)
+		}
+		return fmt.Errorf("create VEX output: %w", err)
 	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
-		return fmt.Errorf("secure temporary VEX output: %w", err)
-	}
-	encoder := cdx.NewBOMEncoder(temporary, cdx.BOMFileFormatJSON).SetPretty(true).SetEscapeHTML(false)
+	complete := false
+	defer func() {
+		_ = output.Close()
+		if !complete {
+			_ = os.Remove(path)
+		}
+	}()
+	encoder := cdx.NewBOMEncoder(output, cdx.BOMFileFormatJSON).SetPretty(true).SetEscapeHTML(false)
 	if err := encoder.EncodeVersion(bom, cdx.SpecVersion1_6); err != nil {
-		temporary.Close()
 		return fmt.Errorf("encode CycloneDX VEX: %w", err)
 	}
-	if err := temporary.Sync(); err != nil {
-		temporary.Close()
+	if err := output.Sync(); err != nil {
 		return fmt.Errorf("flush CycloneDX VEX: %w", err)
 	}
-	if err := temporary.Close(); err != nil {
+	if err := output.Close(); err != nil {
 		return fmt.Errorf("close CycloneDX VEX: %w", err)
 	}
-	if err := publishNoReplace(temporaryPath, path); err != nil {
-		return err
-	}
+	complete = true
 	return nil
 }
 
@@ -444,39 +435,4 @@ func safeFilenamePart(value string) string {
 		return "release"
 	}
 	return result
-}
-
-func publishNoReplace(temporaryPath, targetPath string) error {
-	if err := os.Link(temporaryPath, targetPath); err == nil {
-		_ = os.Remove(temporaryPath)
-		return nil
-	}
-	source, err := os.Open(temporaryPath)
-	if err != nil {
-		return fmt.Errorf("reopen temporary VEX output: %w", err)
-	}
-	defer source.Close()
-	target, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return fmt.Errorf("publish VEX output: %w", err)
-	}
-	complete := false
-	defer func() {
-		target.Close()
-		if !complete {
-			_ = os.Remove(targetPath)
-		}
-	}()
-	if _, err := io.Copy(target, source); err != nil {
-		return fmt.Errorf("copy VEX output to destination: %w", err)
-	}
-	if err := target.Sync(); err != nil {
-		return fmt.Errorf("flush published VEX output: %w", err)
-	}
-	if err := target.Close(); err != nil {
-		return fmt.Errorf("close published VEX output: %w", err)
-	}
-	complete = true
-	_ = os.Remove(temporaryPath)
-	return nil
 }

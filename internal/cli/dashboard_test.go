@@ -673,9 +673,6 @@ func TestDashboardExportsReviewedReleaseAsVEX(t *testing.T) {
 	if _, err := database.CreateRelease(ctx, "AG-200", "2.2"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.CreateComponent(ctx, "AG-200", "2.2", "Alpine", "openssl", "3.0.8"); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := database.ReconcileFindings(ctx, "AG-200", "2.2", []store.FindingMatch{{
 		Ecosystem: "Alpine", Component: "openssl", ComponentVersion: "3.0.8",
 		VulnerabilityID: "CVE-2026-VEX",
