@@ -67,7 +67,7 @@ func RunWithSources(
 	switch remaining[0] {
 	case "check":
 		return runCheck(ctx, remaining[1:], stdout, stderr, querier)
-	case "init", "product", "release", "component", "sync", "feed", "scan", "findings", "assess", "doctor", "dashboard", "ui":
+	case "init", "product", "release", "component", "sync", "feed", "scan", "findings", "assess", "vex", "doctor", "dashboard", "ui":
 		if printRequestedInventoryHelp(remaining, stdout) {
 			return 0
 		}
@@ -122,6 +122,8 @@ func printRequestedInventoryHelp(args []string, stdout io.Writer) bool {
 		printFindingsUsage(stdout)
 	case "assess":
 		printAssessUsage(stdout)
+	case "vex":
+		printVEXUsage(stdout)
 	case "doctor":
 		printDoctorUsage(stdout)
 	case "dashboard", "ui":
@@ -208,6 +210,8 @@ func runInventoryCommand(
 		return runFindings(ctx, args[1:], stdout, stderr, database)
 	case "assess":
 		return runAssess(ctx, args[1:], stdout, stderr, database)
+	case "vex":
+		return runVEX(ctx, args[1:], stdout, stderr, database)
 	case "doctor":
 		return runDoctor(ctx, args[1:], stdout, stderr, database)
 	case "dashboard", "ui":

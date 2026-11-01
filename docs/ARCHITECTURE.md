@@ -19,7 +19,7 @@ CycloneDX JSON -> CLI/TUI -> validation -> SQLite database
                        +---- local matcher <---+
                                   |
                                   v
-                     finding -> human assessment
+                     finding -> human assessment -> CycloneDX VEX JSON
 
 connected database -> checksummed feed bundle -> isolated database
 ```
@@ -40,6 +40,7 @@ service.
 | Finding intelligence | Normalize supported CVSS vectors and extract package-specific fixed boundaries and safe references |
 | Local matcher | Read saved package-version matches without a network request |
 | Feed bundle | Move OSV and KEV snapshots through a controlled offline transfer |
+| VEX exporter | Convert latest human decisions and their timeline into CycloneDX 1.6 JSON |
 
 Package-specific parsing and network clients live outside the CLI layer. The
 store owns transactions and persistence invariants; commands do not assemble
@@ -58,6 +59,8 @@ multi-table writes themselves.
    contacts a remote source.
 5. A person records the product-impact decision and evidence as an append-only
    assessment.
+6. `psirtmap vex export product@release` reads that local history and creates a
+   standalone CycloneDX VEX document without modifying the database.
 
 The normal result is a **potential match**, not an automatic exploitability
 decision.
@@ -77,10 +80,31 @@ Only these explicit operations require network access:
 - `psirtmap feed pull`
 - `psirtmap scan --live`
 
-Normal scans, inventory management, finding review, assessments, feed export,
-and feed import are local operations. OSV receives ecosystem, package name,
-and version. Product names, release names, descriptions, findings,
-assessments, and full SBOM documents are not sent to OSV or CISA.
+Normal scans, inventory management, finding review, assessments, VEX export,
+feed export, and feed import are local operations. OSV receives ecosystem,
+package name, and version. Product names, release names, descriptions,
+findings, assessments, VEX documents, and full SBOM documents are not sent to
+OSV or CISA.
+
+## VEX export boundary
+
+VEX export is a read-only projection of one release's durable findings and
+append-only assessments. The exporter includes only findings with at least one
+human decision. The latest decision is authoritative; `firstIssued` records the
+earliest assessment time and `lastUpdated` records the current decision time.
+Unreviewed matches are omitted rather than interpreted.
+
+Component package URLs are reused as CycloneDX references when present;
+otherwise deterministic UUID references are derived from the local package
+identity. Product and vulnerability references are deterministic, while every
+export receives a new document serial number. The output is encoded through
+the official CycloneDX Go model as specification 1.6 JSON, written with private
+permissions, and published without replacing an existing destination.
+
+Assessment reasons are preserved as free-text analysis detail. PSIRTMap does
+not infer a structured CycloneDX justification from prose. Reviewer, evidence,
+original PSIRTMap state, match activity, aliases, and known-exploitation
+context are retained as namespaced properties.
 
 ## Persistence invariants
 

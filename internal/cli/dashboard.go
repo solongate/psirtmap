@@ -21,6 +21,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/solongate/psirtmap/internal/feed"
 	"github.com/solongate/psirtmap/internal/store"
+	"github.com/solongate/psirtmap/internal/vex"
 )
 
 const (
@@ -97,6 +98,7 @@ const (
 	formComponent
 	formSBOMImport
 	formAssessment
+	formVEXExport
 	formQuickImport
 	formFeedKeygen
 	formFeedExport
@@ -385,6 +387,8 @@ func (m *dashboardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "a":
 			return m, m.openAssessmentForm()
+		case "v":
+			return m, m.openVEXExportForm()
 		case "s":
 			if m.screen == screenScanner {
 				return m.startScan()
@@ -574,6 +578,30 @@ func (m *dashboardModel) openAssessmentForm() tea.Cmd {
 			newDashboardField("Reason", "Required for affected, not-affected, and fixed", "Feature disabled in this firmware build"),
 			newDashboardField("Reviewer", "Person responsible for this decision", "reviewer name"),
 			newDashboardField("Evidence (optional)", "Ticket, test report, advisory, or other reference", "SEC-123 or document reference"),
+		},
+	}
+	m.form.fields[0].input.Focus()
+	return nil
+}
+
+func (m *dashboardModel) openVEXExportForm() tea.Cmd {
+	if m.screen != screenFindings {
+		m.setStatus("Open Findings and press v to export reviewed decisions", false)
+		return nil
+	}
+	if len(m.data.findings) == 0 {
+		m.setStatus("Run and review a release scan before exporting VEX", true)
+		return nil
+	}
+	selected := min(m.selected[screenFindings], len(m.data.findings)-1)
+	finding := m.data.findings[selected]
+	reference := finding.Product + "@" + finding.Release
+	m.form = dashboardForm{
+		kind:  formVEXExport,
+		title: "Export reviewed decisions as CycloneDX VEX",
+		fields: []dashboardField{
+			newDashboardFieldWithValue("Product@release", "The shipped release whose reviewed findings will be exported", reference),
+			newDashboardFieldWithValue("Output path", "A new CycloneDX JSON file; existing files are never overwritten", "./"+vex.DefaultFilename(finding.Product, finding.Release)),
 		},
 	}
 	m.form.fields[0].input.Focus()
@@ -885,6 +913,18 @@ func (m *dashboardModel) saveForm() tea.Cmd {
 			})
 			return dashboardSavedMsg{
 				message: fmt.Sprintf("Recorded %s assessment for %s", assessment.Status, assessment.VulnerabilityID),
+				err:     err,
+			}
+		case formVEXExport:
+			product, release, err := splitReference(values[0], "release")
+			if err != nil {
+				return dashboardSavedMsg{err: err}
+			}
+			summary, err := exportVEXRelease(
+				m.ctx, m.database, product, release, values[1], time.Now().UTC().Truncate(time.Second),
+			)
+			return dashboardSavedMsg{
+				message: fmt.Sprintf("Exported %d reviewed findings to %s", summary.AssessmentsExported, summary.Path),
 				err:     err,
 			}
 		case formFeedExport:
@@ -1634,6 +1674,8 @@ func (m *dashboardModel) renderForm(width int) string {
 			message = " Creating offline feed bundle..."
 		} else if m.form.kind == formFeedKeygen {
 			message = " Generating feed signing key..."
+		} else if m.form.kind == formVEXExport {
+			message = " Creating CycloneDX VEX document..."
 		}
 		lines = append(lines, m.spinner.View()+message)
 	} else if m.form.err != nil {
@@ -1658,6 +1700,7 @@ func (m *dashboardModel) renderHelp(width int) string {
 		helpRow("i", "Import CycloneDX JSON from Releases"),
 		helpRow("Ctrl+O", "Browse for a file while a file-path field is active"),
 		helpRow("a / Enter", "Assess the selected finding"),
+		helpRow("v", "Export reviewed release findings as CycloneDX VEX"),
 		helpRow("s / Enter", "Scan the selected release"),
 		helpRow("u", "Update local OSV and CISA KEV data (uses internet)"),
 		helpRow("r", "Refresh local inventory"),
@@ -1688,6 +1731,7 @@ func (m *dashboardModel) renderFooter() string {
 		hints = append(hints, styleKey.Render("n")+" new", styleKey.Render("i")+" import SBOM")
 	case screenFindings:
 		hints[1] = styleKey.Render("Enter") + " assess"
+		hints = append(hints, styleKey.Render("v")+" export VEX")
 	case screenScanner:
 		hints[1] = styleKey.Render("Enter") + " scan"
 	case screenFeeds:

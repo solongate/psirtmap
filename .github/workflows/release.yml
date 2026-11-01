@@ -57,6 +57,8 @@ jobs:
           sqlite_dir="$(go list -m -f '{{.Dir}}' modernc.org/sqlite)"
           packageurl_dir="$(go list -m -f '{{.Dir}}' github.com/package-url/packageurl-go)"
           cvss_dir="$(go list -m -f '{{.Dir}}' github.com/secengcommons/cvss)"
+          cyclonedx_dir="$(go list -m -f '{{.Dir}}' github.com/CycloneDX/cyclonedx-go)"
+          uuid_dir="$(go list -m -f '{{.Dir}}' github.com/google/uuid)"
           mkdir -p build dist
 
           build_archive() {
@@ -77,9 +79,13 @@ jobs:
             cp THIRD_PARTY_NOTICES.md "build/$package/"
             cp -R scripts "build/$package/"
             mkdir -p "build/$package/docs/assets"
+            cp docs/*.md "build/$package/docs/"
             cp docs/assets/dashboard.svg docs/assets/psirtmap-hero.png docs/assets/solongate-psirtmap-logo.png "build/$package/docs/assets/"
             cp "$packageurl_dir/LICENSE" "build/$package/THIRD_PARTY-packageurl-go-LICENSE"
             cp "$cvss_dir/LICENSE" "build/$package/THIRD_PARTY-cvss-LICENSE"
+            cp "$cyclonedx_dir/LICENSE" "build/$package/THIRD_PARTY-cyclonedx-go-LICENSE"
+            cp "$cyclonedx_dir/NOTICE" "build/$package/THIRD_PARTY-cyclonedx-go-NOTICE"
+            cp "$uuid_dir/LICENSE" "build/$package/THIRD_PARTY-google-uuid-LICENSE"
             cp "$sqlite_dir/LICENSE" "build/$package/THIRD_PARTY-modernc-sqlite-LICENSE"
             cp "$sqlite_dir/LICENSE-SQLITE" "build/$package/THIRD_PARTY-SQLITE-LICENSE"
             cp "$sqlite_dir/LICENSE-3RD-PARTY.md" "build/$package/THIRD_PARTY-LICENSES.md"
