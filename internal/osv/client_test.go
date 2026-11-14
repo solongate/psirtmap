@@ -163,7 +163,7 @@ func TestQueryTrimsInputAndSetsHeaders(t *testing.T) {
 		if request.Header.Get("Accept") != "application/json" {
 			t.Fatalf("Accept = %q", request.Header.Get("Accept"))
 		}
-		if request.Header.Get("User-Agent") != "psirtmap/0.0.11" {
+		if request.Header.Get("User-Agent") != "psirtmap/0.1.0" {
 			t.Fatalf("User-Agent = %q", request.Header.Get("User-Agent"))
 		}
 		var body struct {

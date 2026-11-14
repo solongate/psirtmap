@@ -13,12 +13,13 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/solongate/psirtmap/internal/buildinfo"
 	"github.com/solongate/psirtmap/internal/kev"
 	"github.com/solongate/psirtmap/internal/osv"
 	"github.com/solongate/psirtmap/internal/store"
 )
 
-const version = "0.0.11"
+const version = buildinfo.Version
 
 // VulnerabilityQuerier is implemented by the OSV client.
 type VulnerabilityQuerier interface {
