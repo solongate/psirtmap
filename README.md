@@ -11,7 +11,7 @@ firmware, and embedded-software manufacturers.
 
 [![Release](https://img.shields.io/github/v/release/solongate/psirtmap?style=flat-square&color=7c6cff)](https://github.com/solongate/psirtmap/releases/latest)
 [![CI](https://img.shields.io/github/actions/workflow/status/solongate/psirtmap/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/solongate/psirtmap/actions/workflows/ci.yml)
-[![Go](https://img.shields.io/badge/Go-1.27.2%2B-00ADD8?style=flat-square&logo=go&logoColor=white)](go.mod)
+[![Go](https://img.shields.io/badge/Go-1.27.4%2B-00ADD8?style=flat-square&logo=go&logoColor=white)](go.mod)
 [![License](https://img.shields.io/github/license/solongate/psirtmap?style=flat-square)](LICENSE)
 
 </div>
@@ -65,13 +65,15 @@ is useful evidence; it is not proof that a shipped product is exploitable.
 
 ## What works today
 
-The current release, `v0.0.11`, includes:
+The `v0.1.0` release includes:
 
 - A responsive, keyboard-driven terminal dashboard.
 - A guided first-run flow that creates a product, release, and component
   inventory from one CycloneDX file.
 - Local SQLite inventory for products, releases, and components.
 - Atomic CycloneDX JSON import with package URL normalization and provenance.
+- Distribution-aware Alpine, Debian, and Ubuntu package identity, including
+  source-package matching when the SBOM provides it.
 - Guided product, release, and component creation.
 - Atomic OSV synchronization for the package versions in the local inventory.
 - Local CISA Known Exploited Vulnerabilities (KEV) synchronization and
@@ -89,6 +91,8 @@ The current release, `v0.0.11`, includes:
 - Append-only human assessments with `investigating`, `affected`,
   `not-affected`, and `fixed` decisions.
 - Reviewer, reason, evidence, timestamp, and complete decision history.
+- Local CycloneDX 1.6 VEX export for reviewed findings, available from both
+  the CLI and dashboard.
 - Versioned, checksummed offline feed export and atomic import.
 - Dashboard actions for online updates and offline feed import/export.
 - Persistent bundle provenance, source freshness, and import timestamps.
@@ -106,11 +110,6 @@ The current release, `v0.0.11`, includes:
 
 See the [roadmap](ROADMAP.md) for release status and later PSIRT workflow
 capabilities.
-
-The `main` branch also contains the next, not-yet-released capability:
-CycloneDX 1.6 VEX export from saved human assessments through both the CLI and
-the guided Findings screen. It will be included in the release after
-`v0.0.11`.
 
 ## Install
 

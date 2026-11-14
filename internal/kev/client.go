@@ -16,6 +16,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/solongate/psirtmap/internal/buildinfo"
 )
 
 const (
@@ -126,7 +128,7 @@ func (c *Client) fetchEndpoint(ctx context.Context, endpoint string) (Catalog, e
 		return Catalog{}, fmt.Errorf("create CISA KEV request: %w", err)
 	}
 	request.Header.Set("Accept", "application/json")
-	request.Header.Set("User-Agent", "psirtmap/0.0.11")
+	request.Header.Set("User-Agent", buildinfo.UserAgent)
 
 	response, err := c.httpClient.Do(request)
 	if err != nil {

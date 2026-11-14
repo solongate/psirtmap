@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/solongate/psirtmap/internal/buildinfo"
 )
 
 const (
@@ -387,7 +389,7 @@ func (c *Client) queryPage(ctx context.Context, query queryRequest) (queryRespon
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
-	request.Header.Set("User-Agent", "psirtmap/0.0.11")
+	request.Header.Set("User-Agent", buildinfo.UserAgent)
 
 	httpResponse, err := c.httpClient.Do(request)
 	if err != nil {

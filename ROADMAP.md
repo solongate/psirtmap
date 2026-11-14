@@ -26,7 +26,8 @@ ordered so every release remains small, testable, and useful on its own.
 | Foundation hardening | Backups, compatibility fixtures, output contracts, fuzz seeds, and dependency vulnerability checks | Shipped in `v0.0.10` |
 | Finding intelligence | Normalize severity and expose fixed boundaries, references, detail, filters, and deterministic priority | Shipped in `v0.0.10` |
 | Signed offline feeds | Authenticate feed creators with Ed25519 and explicit trusted keys | Shipped in `v0.0.11` |
-| VEX | Export human assessments as CycloneDX VEX | Implemented in `Unreleased` |
+| VEX | Export human assessments as CycloneDX VEX | Shipped in `v0.1.0` |
+| Full offline matching | Evaluate complete ecosystem data locally without inventory-scoped queries | Next |
 
 ## Shipped: foundation hardening
 
@@ -181,10 +182,10 @@ mechanism. `v0.0.11` adds authenticated feed transfer with:
 - Persistent signer fingerprints and verification status for audit.
 - Backward-compatible unsigned imports only when no trusted key is supplied.
 
-## Implemented in Unreleased: CycloneDX VEX export
+## Shipped: CycloneDX VEX export
 
-The next release turns saved human decisions into a portable, machine-readable
-artifact without changing the local assessment history:
+`v0.1.0` turns saved human decisions into a portable, machine-readable artifact
+without changing the local assessment history:
 
 ```sh
 psirtmap vex export AG-200@2.2 ./AG-200-2.2.vex.cdx.json
@@ -213,10 +214,24 @@ syntax:
 - A dashboard Feeds section for online updates and offline import/export.
 - `psirtmap doctor` for local database, feed, and scan-readiness diagnostics.
 
+## Next: full-ecosystem offline matching
+
+The current feed is intentionally inventory-scoped: the connected machine
+queries OSV for the package versions it already knows, then transfers those
+exact results. The next major data milestone removes that constraint without
+changing the human-review model:
+
+- Import complete OSV data for explicitly supported ecosystems.
+- Update large local datasets incrementally and retain last-known-good data.
+- Evaluate affected version ranges locally instead of depending on stored
+  exact-version API responses.
+- Package the same data into bounded, validated, authenticated offline feeds.
+- Prove compatibility and deterministic results across online and isolated
+  installations before expanding ecosystem coverage.
+
 ## Later
 
 - Homebrew, WinGet, and other native package-manager distribution.
-- Full-ecosystem OSV data with independent local range evaluation.
 - SPDX SBOM import.
 - Product support lifecycle and end-of-life metadata.
 - Finding ownership, due dates, fix releases, and evidence attachments.

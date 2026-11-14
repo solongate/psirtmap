@@ -46,7 +46,7 @@ func TestBuildMapsLatestAssessmentsToCycloneDXVEX(t *testing.T) {
 	}
 
 	document, err := Build(
-		release, components, findings, assessments, "0.0.11", generated,
+		release, components, findings, assessments, "0.1.0", generated,
 		"urn:uuid:11111111-2222-4333-8444-555555555555",
 	)
 	if err != nil {
@@ -67,7 +67,7 @@ func TestBuildMapsLatestAssessmentsToCycloneDXVEX(t *testing.T) {
 		t.Fatalf("metadata timestamp = %q", document.BOM.Metadata.Timestamp)
 	}
 	if document.BOM.Metadata.Tools == nil || document.BOM.Metadata.Tools.Components == nil ||
-		len(*document.BOM.Metadata.Tools.Components) != 1 || (*document.BOM.Metadata.Tools.Components)[0].Version != "0.0.11" {
+		len(*document.BOM.Metadata.Tools.Components) != 1 || (*document.BOM.Metadata.Tools.Components)[0].Version != "0.1.0" {
 		t.Fatalf("metadata tools = %+v", document.BOM.Metadata.Tools)
 	}
 

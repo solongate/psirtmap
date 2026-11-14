@@ -6,6 +6,8 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-14
+
 ### Added
 
 - Offline CycloneDX 1.6 VEX export for the latest human assessment on every
@@ -16,6 +18,28 @@ The project follows [Semantic Versioning](https://semver.org/).
   exported VEX documents.
 - Private, no-overwrite VEX file publication that refuses to replace an
   existing file.
+- OpenSSF Scorecard, REUSE compliance, SonarCloud quality analysis, and
+  release-security metadata across the repository and CI workflows.
+
+### Changed
+
+- Alpine, Debian, and Ubuntu SBOM components now retain distribution-aware OSV
+  identities and use source-package metadata when available.
+- Release metadata is defined once and shared by the CLI, OSV client, and CISA
+  KEV client so reported versions cannot drift.
+- The minimum Go toolchain is now 1.27.4, and maintained SQLite, CVSS, and CI
+  dependencies are updated within their compatible release lines.
+- Public documentation now presents the complete assessment-to-VEX workflow
+  and the current terminal dashboard.
+
+### Security
+
+- Schema migrations validate and quote identifiers before executing DDL.
+- Go 1.27.4 removes the reachable standard-library vulnerability
+  `GO-2026-6859` reported against `net/http` in Go 1.27.3.
+- The installer requires HTTPS sources; CI enforces CodeQL, dependency review,
+  `govulncheck`, DCO sign-off, and cross-platform compilation; and release
+  artifacts include license-bearing CycloneDX SBOMs.
 
 ## [0.0.11] - 2026-10-17
 
@@ -296,7 +320,8 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Human-readable and JSON output.
 - Automated tests, cross-platform release builds, and Apache-2.0 licensing.
 
-[Unreleased]: https://github.com/solongate/psirtmap/compare/v0.0.11...HEAD
+[Unreleased]: https://github.com/solongate/psirtmap/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/solongate/psirtmap/compare/v0.0.11...v0.1.0
 [0.0.11]: https://github.com/solongate/psirtmap/compare/v0.0.10...v0.0.11
 [0.0.10]: https://github.com/solongate/psirtmap/compare/v0.0.9...v0.0.10
 [0.0.9]: https://github.com/solongate/psirtmap/compare/v0.0.8...v0.0.9
